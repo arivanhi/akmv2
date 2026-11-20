@@ -2050,3 +2050,121 @@ body.auth-page.vk-body-padded {
 .i2c-sensor-card.scanning .i2c-sensor-info span {
     color: #1d4ed8;
 }
+
+/* =============================================== */
+/* MEDISYN Rebranding, Sidebar Minimize & Grey Done */
+/* =============================================== */
+.auth-logo-medisyn {
+    height: 70px !important;
+    max-width: 290px;
+    width: auto;
+    object-fit: contain;
+}
+
+.sidebar {
+    background: linear-gradient(180deg, #073763 0%, #0b4f8a 100%);
+}
+
+.components {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.sidebar-footer {
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.components li a:hover {
+    color: #073763;
+    background: #ffffff;
+}
+
+.sidebar-header {
+    padding: 14px 16px;
+    background: #ffffff;
+    border-bottom: 3px solid #08999c;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    min-height: 72px;
+}
+
+.sidebar-brand {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    flex: 1;
+}
+
+.logo-medisyn-full {
+    max-width: 172px;
+    width: 100%;
+    height: auto;
+    object-fit: contain;
+    display: block;
+}
+
+.logo-medisyn-mini {
+    display: none;
+    width: 46px;
+    height: 46px;
+    object-fit: contain;
+    transition: transform 0.15s ease;
+}
+
+.sidebar-header #sidebarCollapse {
+    color: #073763;
+    font-size: 1.35rem;
+    padding: 4px 6px;
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+
+.sidebar-header #sidebarCollapse:hover {
+    color: #08999c;
+    background: #f1f5f9;
+}
+
+/* Saat sidebar di-minimize (.active): hanya tampilkan ikon M Medisyn di tengah */
+.sidebar.active .sidebar-header {
+    padding: 12px 8px;
+    justify-content: center;
+}
+
+.sidebar.active .sidebar-brand {
+    justify-content: center;
+    cursor: pointer;
+}
+
+.sidebar.active .logo-medisyn-full {
+    display: none !important;
+}
+
+.sidebar.active .logo-medisyn-mini {
+    display: block !important;
+}
+
+.sidebar.active .logo-medisyn-mini:hover,
+.sidebar.active .logo-medisyn-mini:active {
+    transform: scale(1.07);
+}
+
+.sidebar.active .sidebar-header #sidebarCollapse {
+    display: none !important;
+}
+
+/* Tombol pilihan pengukuran yang sudah selesai / sesuai menjadi abu-abu (grey) */
+.btn-measure.btn-selesai,
+.btn-measure[data-type].btn-selesai,
+.btn-measure.btn-measure-combo.btn-selesai,
+.btn-measure:disabled {
+    background: #8b95a5 !important;
+    background-image: none !important;
+    color: #f8fafc !important;
+    border: 1px solid #7a8494 !important;
+    box-shadow: none !important;
+    transform: none !important;
+    filter: none !important;
+    opacity: 0.9 !important;
+    cursor: not-allowed !important;
+}

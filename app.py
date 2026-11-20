@@ -1511,7 +1511,7 @@ def print_receipt():
     try:
         printer_instance.set(align="center")
         printer_instance.text("Hasil Pemeriksaan Kesehatan\n")
-        printer_instance.text("KOPER SAKTI UDINUS x DINKES\n")
+        printer_instance.text("MEDISYN - Medical System\n")
         printer_instance.text("================================\n")
         printer_instance.set(align="left")
         printer_instance.text(f"Nama    : {data.get('nama')}\n")
