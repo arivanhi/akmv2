@@ -61,9 +61,12 @@
 
 <div class="form-container">
     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; border-bottom: 2px solid #f1f5f9; padding-bottom: 12px;">
-        <h3 style="margin: 0; border: none; padding: 0;">Cek Hardware & Sensor I2C</h3>
-        <button id="btnCheckI2C" class="btn-setting primary" style="flex: 0 0 auto; padding: 9px 18px;">
-            <i class="fas fa-sync-alt"></i> Cek Ulang Bus I2C
+        <div>
+            <h3 style="margin: 0; border: none; padding: 0;">Cek Hardware & Sensor I2C</h3>
+            <small id="i2cScanSummary" style="color: #64748b; font-weight: 500;">Memeriksa status bus I2C...</small>
+        </div>
+        <button id="btnCheckI2C" class="btn-setting primary" style="flex: 0 0 auto; padding: 10px 20px;">
+            <i class="fas fa-sync-alt"></i> Cek Ulang & Re-Init Bus I2C
         </button>
     </div>
 
@@ -368,27 +371,55 @@ function fetchNetworkInfo() {
     });
 }
 
-function checkI2CSensors() {
-    $.get('/api/hardware/i2c_status', function(res) {
-        function updateSensorCard(cardSel, textSel, ok) {
-            $(cardSel).removeClass('connected disconnected').addClass(ok ? 'connected' : 'disconnected');
-            $(textSel).html(ok ? '<i class="fas fa-check-circle"></i> Terhubung & Siap' : '<i class="fas fa-times-circle"></i> Tidak Terdeteksi');
+function renderI2CResult(res) {
+    function updateSensorCard(cardSel, textSel, ok, detail) {
+        $(cardSel).removeClass('connected disconnected scanning').addClass(ok ? 'connected' : 'disconnected');
+        const label = detail || (ok ? 'Terhubung & Siap' : 'Tidak Terdeteksi');
+        $(textSel).html(`<i class="fas ${ok ? 'fa-check-circle' : 'fa-times-circle'}"></i> ${label}`);
+    }
+    updateSensorCard('#cardMlx', '#statusMlx', res.mlx90614, res.mlx90614_detail);
+    updateSensorCard('#cardMax', '#statusMax', res.max30102, res.max30102_detail);
+    updateSensorCard('#cardAs7', '#statusAs7', res.as7265x, res.as7265x_detail);
+
+    const cnt = res.active_count !== undefined ? res.active_count : 0;
+    const t = res.checked_at || new Date().toLocaleTimeString('id-ID');
+    $('#i2cScanSummary').html(`Pemindaian terakhir pukul <strong>${t}</strong> — <strong>${cnt}/3 sensor I2C aktif</strong>`);
+}
+
+function checkI2CSensors(isManualReinit) {
+    const btn = $('#btnCheckI2C');
+    const ori = '<i class="fas fa-sync-alt"></i> Cek Ulang & Re-Init Bus I2C';
+
+    if (isManualReinit) {
+        btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Memindai Bus I2C...');
+        $('#cardMlx, #cardMax, #cardAs7').removeClass('connected disconnected').addClass('scanning');
+        $('#statusMlx, #statusMax, #statusAs7').html('<i class="fas fa-spinner fa-spin"></i> Memindai register...');
+        $('#i2cScanSummary').text('Sedang memindai ulang alamat 0x5A, 0x57, 0x49 & me-reset driver...');
+    }
+
+    const startTs = Date.now();
+    $.ajax({
+        url: '/api/hardware/i2c_status?_t=' + startTs,
+        method: isManualReinit ? 'POST' : 'GET',
+        cache: false,
+        success: function(res) {
+            const delay = isManualReinit ? Math.max(0, 450 - (Date.now() - startTs)) : 0;
+            setTimeout(() => {
+                renderI2CResult(res);
+                btn.prop('disabled', false).html(ori);
+            }, delay);
+        },
+        error: function() {
+            $('#i2cScanSummary').html('<span style="color:#dc2626;">Gagal memeriksa bus I2C.</span>');
+            btn.prop('disabled', false).html(ori);
         }
-        updateSensorCard('#cardMlx', '#statusMlx', res.mlx90614);
-        updateSensorCard('#cardMax', '#statusMax', res.max30102);
-        updateSensorCard('#cardAs7', '#statusAs7', res.as7265x);
     });
 }
 
 $(document).ready(function() {
-    checkI2CSensors();
+    checkI2CSensors(false);
     $('#btnCheckI2C').click(function() {
-        const btn = $(this);
-        const ori = btn.html();
-        btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Memeriksa...');
-        $.get('/api/hardware/i2c_status', function() {
-            checkI2CSensors();
-        }).always(() => btn.prop('disabled', false).html(ori));
+        checkI2CSensors(true);
     });
 
     // Tombol Stepper +/- untuk layar sentuh

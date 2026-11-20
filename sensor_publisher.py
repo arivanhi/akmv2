@@ -30,6 +30,7 @@ BROKER           = os.getenv("MQTT_BROKER_HOST", "localhost")
 PORT             = int(os.getenv("MQTT_BROKER_PORT", "1883"))
 I2C_BUS_NUM      = int(os.getenv("I2C_BUS_NUM", "1"))
 SCAN_DURATION    = 5
+PPG_DURATION     = 6  # 6 detik (~150 sampel @25Hz) agar gelombang nadi terambil utuh
 CALIBRATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration_config.json")
 
 MLX_ADDR = 0x5A
@@ -235,8 +236,8 @@ def spo2_scan_worker(client, target_mode="ppg_all"):
         while spo2_active:
             now = time.time()
             elapsed = now - start_time
-            remaining = max(0, int(round(SCAN_DURATION - elapsed)))
-            progress = min(99, int(round((elapsed / SCAN_DURATION) * 100)))
+            remaining = max(0, int(round(PPG_DURATION - elapsed)))
+            progress = min(99, int(round((elapsed / PPG_DURATION) * 100)))
 
             batch = max_sensor.read_fifo()
             for r, ir in batch:
@@ -252,9 +253,9 @@ def spo2_scan_worker(client, target_mode="ppg_all"):
                     "progress": progress
                 }))
 
-            if elapsed >= SCAN_DURATION:
+            if elapsed >= PPG_DURATION:
                 break
-            time.sleep(0.08)
+            time.sleep(0.06)
 
         max_sensor.disable_leds()
         if not spo2_active:
@@ -269,18 +270,23 @@ def spo2_scan_worker(client, target_mode="ppg_all"):
             }))
             return
 
-        spo2_val, bpm_val, s_val, d_val, finger = max_sensor.compute_metrics(
+        spo2_val, bpm_val, s_val, d_val, status_code = max_sensor.compute_metrics(
             red_samples, ir_samples,
             sys_bias=sys_bias, dia_bias=dia_bias,
             spo2_bias=spo2_bias, bpm_bias=bpm_bias
         )
 
-        if not finger or spo2_val is None or bpm_val is None:
-            print("[MAX30102] Jari atau gelombang nadi tidak valid.")
+        if status_code != "ok" or spo2_val is None or bpm_val is None:
+            err_msg = (
+                "Jari belum terdeteksi di atas sensor Oximeter MAX30102. Pastikan ujung jari menutupi cahaya merah sensor."
+                if status_code == "no_finger"
+                else "Gelombang denyut nadi belum stabil. Letakkan jari dengan rileks tanpa bergerak selama pemindaian."
+            )
+            print(f"[MAX30102] Gagal ({status_code}): {err_msg}")
             client.publish("medical/spo2", json.dumps({
                 "status": "error",
                 "target_mode": target_mode,
-                "message": "Jari atau denyut nadi belum terbaca stabil pada sensor MAX30102. Tempelkan ujung jari dengan tenang tanpa menekan terlalu keras."
+                "message": err_msg
             }))
             return
 
@@ -432,6 +438,10 @@ def on_message(client, userdata, msg):
             pass
 
     print(f"[MQTT CMD] {topic} -> cmd={cmd}, target_mode={target_mode}")
+
+    if topic == "medical/cmd/reinit":
+        threading.Thread(target=init_hardware, daemon=True).start()
+        return
 
     if topic == "medical/cmd/stop_all" or cmd == "stop":
         suhu_active = False

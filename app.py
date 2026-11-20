@@ -1305,11 +1305,32 @@ def save_calibration():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route("/api/hardware/i2c_status")
+@app.route("/api/hardware/i2c_status", methods=["GET", "POST"])
 def check_i2c_status():
+    """
+    Memeriksa ketiga modul I2C Kopersakti dengan protokol register masing-masing:
+    - MLX90614 (0x5A): SMBus Read Word (register 0x07; read_byte ditolak oleh protokol SMBus MLX)
+    - MAX30102 (0x57): Read Part ID register 0xFF (0x15)
+    - AS7265x  (0x49): Read Status register 0x00
+    Jika dipanggil via POST (tombol Cek Ulang Bus I2C), memicu re-init driver di sensor_publisher.
+    """
     if g.user is None:
         return jsonify({"error": "Unauthorized"}), 401
-    res = {"bus_exists": False, "mlx90614": False, "max30102": False, "as7265x": False}
+
+    if request.method == "POST" or request.args.get("reinit") == "1":
+        mqtt_client.publish("medical/cmd/reinit", "reinit")
+
+    res = {
+        "bus_exists": False,
+        "mlx90614": False,
+        "mlx90614_detail": "Tidak Terdeteksi",
+        "max30102": False,
+        "max30102_detail": "Tidak Terdeteksi",
+        "as7265x": False,
+        "as7265x_detail": "Tidak Terdeteksi",
+        "active_count": 0,
+        "checked_at": datetime.now().strftime("%H:%M:%S")
+    }
     dev_path = f"/dev/i2c-{I2C_BUS_NUM}"
     if not HAS_SMBUS or not os.path.exists(dev_path):
         return jsonify(res)
@@ -1318,12 +1339,34 @@ def check_i2c_status():
     bus = None
     try:
         bus = smbus2.SMBus(I2C_BUS_NUM)
-        for key, addr in (("mlx90614", 0x5A), ("max30102", 0x57), ("as7265x", 0x49)):
-            try:
-                bus.read_byte(addr)
-                res[key] = True
-            except Exception:
-                res[key] = False
+
+        # 1. MLX90614 (0x5A) wajib menggunakan read_word_data (SMBus Read Word)
+        try:
+            raw_mlx = bus.read_word_data(0x5A, 0x07)
+            temp_c = round((raw_mlx * 0.02) - 273.15, 1)
+            if -40.0 < temp_c < 125.0:
+                res["mlx90614"] = True
+                res["mlx90614_detail"] = f"Terhubung • Bacaan {temp_c} °C"
+        except Exception:
+            pass
+
+        # 2. MAX30102 (0x57) baca Part ID register 0xFF
+        try:
+            part_id = bus.read_byte_data(0x57, 0xFF)
+            res["max30102"] = True
+            res["max30102_detail"] = f"Terhubung • Part ID 0x{part_id:02X}"
+        except Exception:
+            pass
+
+        # 3. AS7265x Triad (0x49) baca status register 0x00
+        try:
+            _ = bus.read_byte_data(0x49, 0x00)
+            res["as7265x"] = True
+            res["as7265x_detail"] = "Terhubung • 18-Kanal Siap"
+        except Exception:
+            pass
+
+        res["active_count"] = sum(1 for k in ("mlx90614", "max30102", "as7265x") if res[k])
     except Exception:
         pass
     finally:
