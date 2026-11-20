@@ -4,7 +4,7 @@
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>Login - Sistem Monitoring Kesehatan</title>
-		<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+		<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=2.2" />
 	</head>
 	<body class="auth-page">
 		{% with messages = get_flashed_messages(with_categories=true) %} {% if messages %}
@@ -44,5 +44,6 @@
 				<a href="{{ url_for('signup') }}">Sign Up</a>
 			</div>
 		</div>
+		<script src="{{ url_for('static', filename='virtual-keyboard.js') }}?v=2.2"></script>
 	</body>
 </html>
