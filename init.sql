@@ -57,11 +57,21 @@ CREATE TABLE IF NOT EXISTS measurements (
 CREATE TABLE IF NOT EXISTS raw_sensor_data (
     id SERIAL PRIMARY KEY,
     patient_id INT REFERENCES patients(id) ON DELETE SET NULL,
+    measurement_id INT REFERENCES measurements(id) ON DELETE SET NULL,
     sensor_type VARCHAR(50) NOT NULL,
     raw_values JSONB,
+    raw_frames JSONB,
+    context_features JSONB,
     predicted_value FLOAT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    ground_truth_value FLOAT,
+    ground_truth_source VARCHAR(100),
+    notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE
 );
+
+CREATE INDEX IF NOT EXISTS idx_raw_sensor_type ON raw_sensor_data(sensor_type);
+CREATE INDEX IF NOT EXISTS idx_raw_sensor_gt ON raw_sensor_data(sensor_type) WHERE ground_truth_value IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS system_config (
     key VARCHAR(50) PRIMARY KEY,

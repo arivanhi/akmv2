@@ -29,8 +29,9 @@ from drivers.driver_as7265x_spektro import MultiBiomarkerModel
 BROKER           = os.getenv("MQTT_BROKER_HOST", "localhost")
 PORT             = int(os.getenv("MQTT_BROKER_PORT", "1883"))
 I2C_BUS_NUM      = int(os.getenv("I2C_BUS_NUM", "1"))
-SCAN_DURATION    = 5
-PPG_DURATION     = 6  # 6 detik (~150 sampel @25Hz) agar gelombang nadi terambil utuh
+SCAN_DURATION    = 5  # Suhu tubuh MLX90614 (5 detik @ 1 Hz)
+PPG_DURATION     = 6  # Oximeter/Tensi MAX30102 (6 detik, ADC 100Hz / FIFO avg 4 = 25Hz -> ~150 sampel)
+SPEKTRO_DURATION = 7  # Spektroskopi AS7265x (7 detik @ ~3.4 Hz kontinu -> ~22-25 frame x 18 kanal)
 CALIBRATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration_config.json")
 
 MLX_ADDR = 0x5A
@@ -290,7 +291,12 @@ def spo2_scan_worker(client, target_mode="ppg_all"):
             }))
             return
 
-        print(f"[MAX30102 SELESAI] SpO2={spo2_val}%, BPM={bpm_val}, Tensi={s_val}/{d_val} mmHg")
+        actual_ppg_dur = max(0.5, time.time() - start_time)
+        ppg_hz = round(len(ir_samples) / actual_ppg_dur, 2)
+        dc_red = round(float(sum(red_samples) / max(1, len(red_samples))), 1)
+        dc_ir  = round(float(sum(ir_samples) / max(1, len(ir_samples))), 1)
+
+        print(f"[MAX30102 SELESAI] SpO2={spo2_val}%, BPM={bpm_val}, Tensi={s_val}/{d_val} mmHg ({len(ir_samples)} sampel @ {ppg_hz} Hz)")
         client.publish("medical/spo2", json.dumps({
             "status": "done",
             "target_mode": target_mode,
@@ -299,6 +305,17 @@ def spo2_scan_worker(client, target_mode="ppg_all"):
             "sys": s_val,
             "dia": d_val,
             "tekanan": f"{s_val}/{d_val}",
+            "raw_ppg": {
+                "n_samples": len(ir_samples),
+                "sampling_hz": ppg_hz,
+                "hardware_adc_hz": 100.0,
+                "fifo_averaging": 4,
+                "duration_sec": round(actual_ppg_dur, 2),
+                "dc_red": dc_red,
+                "dc_ir": dc_ir,
+                "red_waveform": [int(x) for x in red_samples],
+                "ir_waveform": [int(x) for x in ir_samples]
+            },
             "remaining": 0,
             "progress": 100
         }))
@@ -314,10 +331,10 @@ def spo2_scan_worker(client, target_mode="ppg_all"):
         }))
 
 
-# ── Thread 3: Spektroskopi 18-Channel (Gula, Kolesterol, Asam Urat, 5s Scan) ──
+# ── Thread 3: Spektroskopi 18-Channel (Gula, Kolesterol, Asam Urat, 7s Optimal Scan) ──
 def spektro_scan_worker(client, target_mode="spektro_all"):
     global spektro_active, spektro_engine
-    print(f"[SPEKTRO] Memulai scan 5 detik AS7265x (mode={target_mode})...")
+    print(f"[SPEKTRO] Memulai scan optimal {SPEKTRO_DURATION} detik AS7265x (~3.4 Hz kontinu, mode={target_mode})...")
 
     if not os.path.exists(f"/dev/i2c-{I2C_BUS_NUM}"):
         spektro_active = False
@@ -332,6 +349,7 @@ def spektro_scan_worker(client, target_mode="spektro_all"):
         spektro_engine = MultiBiomarkerModel(i2c_lock=I2C_LOCK)
 
     spektro_engine.load_or_create_calibration()
+    spektro_engine.reload_ml_models()
     if not spektro_engine.enable_leds():
         spektro_active = False
         client.publish("medical/spektro", json.dumps({
@@ -349,26 +367,30 @@ def spektro_scan_worker(client, target_mode="spektro_all"):
         while spektro_active:
             now = time.time()
             elapsed = now - start_time
-            remaining = max(0, int(round(SCAN_DURATION - elapsed)))
-            progress = min(99, int(round((elapsed / SCAN_DURATION) * 100)))
+            remaining = max(0, int(round(SPEKTRO_DURATION - elapsed)))
+            progress = min(99, int(round((elapsed / SPEKTRO_DURATION) * 100)))
 
             ch18 = spektro_engine.read_18_channels()
             if ch18 is not None:
                 samples_18.append(ch18)
 
-            if now - last_pub >= 0.8:
-                last_pub = now
+            now_after = time.time()
+            if now_after - last_pub >= 0.6:
+                last_pub = now_after
                 client.publish("medical/spektro", json.dumps({
                     "status": "scanning",
                     "target_mode": target_mode,
-                    "remaining": remaining,
-                    "progress": progress
+                    "frames_collected": len(samples_18),
+                    "remaining": max(0, int(round(SPEKTRO_DURATION - (now_after - start_time)))),
+                    "progress": min(99, int(round(((now_after - start_time) / SPEKTRO_DURATION) * 100)))
                 }))
 
-            if elapsed >= SCAN_DURATION:
+            if (now_after - start_time) >= SPEKTRO_DURATION:
                 break
-            time.sleep(0.35)
+            # Jeda tipis 15ms agar bus I2C responsif sementara sampling AS7265x mencapai ~3.3-3.5 Hz penuh
+            time.sleep(0.015)
 
+        actual_duration = max(0.5, time.time() - start_time)
         spektro_engine.disable_leds()
         if not spektro_active:
             return
@@ -382,17 +404,20 @@ def spektro_scan_worker(client, target_mode="spektro_all"):
             }))
             return
 
-        res = spektro_engine.predict_biomarkers(samples_18)
+        res = spektro_engine.predict_biomarkers(samples_18, duration_sec=actual_duration)
         if not res or not res.get("finger_detected", False):
-            print("[SPEKTRO] Jari tidak terdeteksi pada sensor AS7265x.")
+            print(f"[SPEKTRO] Jari tidak terdeteksi pada sensor AS7265x ({len(samples_18)} frame dibaca).")
             client.publish("medical/spektro", json.dumps({
                 "status": "error",
                 "target_mode": target_mode,
-                "message": "Jari tidak terdeteksi pada sensor spektrometri AS7265x. Pastikan jari menutup rapat jendela sensor."
+                "message": "Jari tidak terdeteksi atau kurang menutup rapat jendela sensor AS7265x. Pastikan ujung jari menutup jendela optik selama pemindaian."
             }))
             return
 
-        print(f"[SPEKTRO SELESAI] Gula={res['gula']}, Kolesterol={res['kolesterol']}, Asam Urat={res['asam_urat']}")
+        print(
+            f"[SPEKTRO SELESAI] Gula={res['gula']}, Kolesterol={res['kolesterol']}, Asam Urat={res['asam_urat']} "
+            f"| Valid={res['valid_frames']}/{res['total_frames']} frame @ {res['sampling_hz']} Hz"
+        )
         client.publish("medical/spektro", json.dumps({
             "status": "done",
             "target_mode": target_mode,
@@ -400,6 +425,20 @@ def spektro_scan_worker(client, target_mode="spektro_all"):
             "kolesterol": res["kolesterol"],
             "asam_urat": res["asam_urat"],
             "raw_18ch": res.get("raw_avg", []),
+            "raw_meta": {
+                "sampling_hz": res.get("sampling_hz", 0.0),
+                "duration_sec": round(actual_duration, 2),
+                "total_frames": res.get("total_frames", len(samples_18)),
+                "valid_frames": res.get("valid_frames", len(samples_18)),
+                "discarded_settling_frames": res.get("discarded_frames", 0),
+                "integration_cycles": 49,
+                "gain": "64x",
+                "std_18ch": res.get("raw_std", []),
+                "l2_norm_18ch": res.get("l2_norm", []),
+                "channels_used": res.get("channels_used", {}),
+                "model_source": res.get("model_source", {}),
+                "frames": res.get("all_frames", [])
+            },
             "remaining": 0,
             "progress": 100
         }))

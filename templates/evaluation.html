@@ -1,78 +1,144 @@
 {% extends 'base.html' %}
-{% block title %}Laporan Evaluasi AI - Sistem Monitoring Kesehatan{% endblock %}
+{% block title %}Evaluasi AI & Dataset ML - Sistem Monitoring Kesehatan{% endblock %}
 
 {% block content %}
 <style>
     @media print {
-        /* 1. Matikan paksa penyembunyian global dari style.css lama */
-        body * {
-            visibility: hidden !important;
-        }
-        /* 2. Aktifkan hanya area utama laporan evaluasi */
-        #content, #content * {
-            visibility: visible !important;
-        }
-        /* 3. Sembunyikan elemen navigasi dashboard agar tidak ikut tercetak */
-        .sidebar, .navbar, .header-actions, .text-muted, #sidebarCollapse {
-            display: none !important;
-        }
-        /* 4. Atur posisi halaman agar presisi penuh ke kertas */
-        #content {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
-        .content-area {
-            margin: 0 !important;
-            padding: 0 !important;
-            box-shadow: none !important;
-            background: transparent !important;
-        }
-        /* 5. Cegah card terpotong di tengah halaman jika beda halaman kertas */
-        .eval-card {
-            page-break-inside: avoid !important;
-            border: 1px solid #ddd !important;
-            box-shadow: none !important;
-            margin-bottom: 25px !important;
-        }
-        /* 6. Memaksa browser mencetak warna gradasi header card */
-        .eval-header {
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-        }
+        body * { visibility: hidden !important; }
+        #content, #content * { visibility: visible !important; }
+        .sidebar, .navbar, .header-actions, .text-muted, #sidebarCollapse, .no-print { display: none !important; }
+        #content { position: absolute; left: 0; top: 0; width: 100%; margin: 0 !important; padding: 0 !important; }
+        .content-area { margin: 0 !important; padding: 0 !important; box-shadow: none !important; background: transparent !important; }
+        .eval-card { page-break-inside: avoid !important; border: 1px solid #ddd !important; box-shadow: none !important; margin-bottom: 25px !important; }
+        .eval-header { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    }
+
+    .ml-panel-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 22px;
+        margin-top: 26px;
+        box-shadow: 0 4px 16px rgba(15, 23, 42, 0.05);
+    }
+    .ml-stats-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+        gap: 12px;
+        margin-bottom: 18px;
+    }
+    .ml-stat-box {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 12px 14px;
+    }
+    .ml-stat-box .lbl { font-size: 0.78rem; color: #64748b; font-weight: 600; text-transform: uppercase; }
+    .ml-stat-box .val { font-size: 1.45rem; font-weight: 800; color: #0f172a; margin-top: 2px; }
+    .ml-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px;
+        background: #f1f5f9;
+        border-radius: 10px;
+        margin-bottom: 18px;
+    }
+    .ml-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 13px;
+        border-radius: 8px;
+        font-size: 0.84rem;
+        font-weight: 600;
+        text-decoration: none !important;
+        border: none;
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+    .ml-btn-green { background: #16a34a; color: #fff !important; }
+    .ml-btn-blue { background: #2563eb; color: #fff !important; }
+    .ml-btn-slate { background: #334155; color: #fff !important; }
+    .ml-btn-amber { background: #d97706; color: #fff !important; }
+    .ml-btn:hover { opacity: 0.92; transform: translateY(-1px); }
+
+    .gt-table-wrap { overflow-x: auto; }
+    .gt-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+    .gt-table th {
+        background: #0f172a;
+        color: #f8fafc;
+        padding: 10px 10px;
+        text-align: left;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    .gt-table td {
+        padding: 9px 10px;
+        border-bottom: 1px solid #e2e8f0;
+        vertical-align: middle;
+    }
+    .gt-table tr:hover td { background: #f8fafc; }
+    .badge-stype {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 12px;
+        font-size: 0.74rem;
+        font-weight: 700;
+    }
+    .stype-gula { background: #dcfce7; color: #166534; }
+    .stype-kol  { background: #dbeafe; color: #1e40af; }
+    .stype-urat { background: #ffedd5; color: #9a3412; }
+    .stype-other { background: #e2e8f0; color: #334155; }
+    .gt-inline-input {
+        width: 92px;
+        padding: 6px 8px;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        font-weight: 700;
+        font-size: 0.86rem;
+    }
+    .gt-inline-src {
+        width: 128px;
+        padding: 6px 6px;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        background: #fff;
     }
 </style>
 
 <div class="page-header">
-    <h1 class="page-title"><i class="fas fa-microchip"></i> Laporan Kinerja Model AI</h1>
-    <div class="header-actions">
+    <h1 class="page-title"><i class="fas fa-microchip"></i> Evaluasi AI & Dataset Machine Learning</h1>
+    <div class="header-actions no-print" style="display:flex; gap:10px; flex-wrap:wrap;">
+        <a href="/api/ml_dataset/export_csv?sensor_type=spektro&labeled_only=1" class="ml-btn ml-btn-green">
+            <i class="fas fa-file-csv"></i> Export CSV Ground-Truth
+        </a>
         <button onclick="window.print()" class="btn-export-all" style="background-color: #17a2b8; border-color: #17a2b8;">
             <i class="fas fa-print"></i> Cetak Laporan
         </button>
     </div>
 </div>
-<p class="text-muted" style="margin-top: -25px; margin-bottom: 25px;">
-    Dokumen rahasia evaluasi internal algoritma <em>Non-Invasive</em> Koper Sakti berbasis data pengujian riil.
+<p class="text-muted" style="margin-top: -20px; margin-bottom: 22px;">
+    Evaluasi akurasi sensor spektrometri 18-kanal <strong>AS7265x (~3.4 Hz, filter IQR)</strong> beserta manajemen <em>Ground-Truth</em> untuk pelatihan <em>Machine Learning</em>.
 </p>
 
+<!-- KARTU 1: GULA DARAH -->
 <div class="eval-card theme-gula">
-    <div class="eval-header" style="display: flex; justify-content: space-between; align-items: center;">
+    <div class="eval-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
         <div style="display: flex; align-items: center; gap: 15px;">
             <i class="fas fa-tint"></i>
             <div>
-                <span style="font-size: 0.8rem; text-transform: uppercase; opacity: 0.9;">Laporan Evaluasi Non-Invasive</span>
+                <span style="font-size: 0.8rem; text-transform: uppercase; opacity: 0.9;">Kanal Aktif: D(485), I(645), V(810), W(860), K(900), L(940)</span>
                 <h3>GULA DARAH (GLUKOSA)</h3>
             </div>
         </div>
         <div>
-            {% if metrics.gula.is_live %}
-                <span style="background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600;"><i class="fas fa-bolt"></i> Kalkulasi Live CSV</span>
-            {% else %}
-                <span style="background: rgba(0,0,0,0.15); padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-style: italic;"><i class="fas fa-history"></i> Benchmark Standar</span>
-            {% endif %}
+            <span style="background: rgba(255,255,255,0.22); padding: 4px 11px; border-radius: 20px; font-size: 0.76rem; font-weight: 600;">
+                <i class="fas fa-database"></i> {{ metrics.gula.source_label }}
+            </span>
         </div>
     </div>
     <div class="eval-body">
@@ -86,7 +152,7 @@
                 <div class="metric-value">± {{ metrics.gula.mae }} <small style="font-size: 0.5em; font-weight:normal;">mg/dL</small></div>
             </div>
             <div class="metric-item">
-                <div class="metric-label">Metrik Model AI (R²)</div>
+                <div class="metric-label">Koefisien Determinasi (R²)</div>
                 <div class="metric-value">{{ metrics.gula.r2 }}</div>
             </div>
             <div class="metric-item">
@@ -95,27 +161,26 @@
             </div>
         </div>
         <div class="eval-conclusion">
-            <h5><i class="fas fa-stethoscope"></i> Kesimpulan Tahap 1 & Analisis Klinis</h5>
-            Kinerja sensor NIR 940nm dan AI menunjukkan hasil berskala klinis. Tingkat akurasi mendekati 99% membuktikan alat ini mampu melacak fluktuasi glukosa darah dengan presisi luar biasa. Ini merupakan fitur unggulan yang sudah siap untuk validasi lanjutan.
+            <h5><i class="fas fa-stethoscope"></i> Basis Ilmiah & Konfigurasi Sampling</h5>
+            Menggunakan kombinasi kanal <strong>485 nm, 645 nm, 860 nm, dan 940 nm</strong> (Shokrekhodaei et al., 2021) serta normalisasi titik isosbestik hemoglobin <strong>810 nm &amp; 900 nm</strong> (Hina &amp; Saadeh, 2022) pada sampling kontinu ~3.4 Hz selama 7 detik (~22 sampel/pengukuran).
         </div>
     </div>
 </div>
 
+<!-- KARTU 2: ASAM URAT -->
 <div class="eval-card theme-asam">
-    <div class="eval-header" style="display: flex; justify-content: space-between; align-items: center;">
+    <div class="eval-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
         <div style="display: flex; align-items: center; gap: 15px;">
             <i class="fas fa-vial"></i>
             <div>
-                <span style="font-size: 0.8rem; text-transform: uppercase; opacity: 0.9;">Laporan Evaluasi Non-Invasive</span>
+                <span style="font-size: 0.8rem; text-transform: uppercase; opacity: 0.9;">Kanal Aktif: A(410), B(435), U(760), V(810), K(900), L(940)</span>
                 <h3>ASAM URAT</h3>
             </div>
         </div>
         <div>
-            {% if metrics.asam_urat.is_live %}
-                <span style="background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600;"><i class="fas fa-bolt"></i> Kalkulasi Live CSV</span>
-            {% else %}
-                <span style="background: rgba(0,0,0,0.15); padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-style: italic;"><i class="fas fa-history"></i> Benchmark Standar</span>
-            {% endif %}
+            <span style="background: rgba(255,255,255,0.22); padding: 4px 11px; border-radius: 20px; font-size: 0.76rem; font-weight: 600;">
+                <i class="fas fa-database"></i> {{ metrics.asam_urat.source_label }}
+            </span>
         </div>
     </div>
     <div class="eval-body">
@@ -129,7 +194,7 @@
                 <div class="metric-value">± {{ metrics.asam_urat.mae }} <small style="font-size: 0.5em; font-weight:normal;">mg/dL</small></div>
             </div>
             <div class="metric-item">
-                <div class="metric-label">Metrik Model AI (R²)</div>
+                <div class="metric-label">Koefisien Determinasi (R²)</div>
                 <div class="metric-value">{{ metrics.asam_urat.r2 }}</div>
             </div>
             <div class="metric-item">
@@ -138,27 +203,26 @@
             </div>
         </div>
         <div class="eval-conclusion" style="background: rgba(230, 126, 34, 0.05); border-left-color: #e67e22;">
-            <h5 style="color: #d35400;"><i class="fas fa-stethoscope"></i> Kesimpulan Tahap 1 & Analisis Klinis</h5>
-            Model regresi berfungsi dengan sangat stabil. Deviasi absolut (meleset) secara rata-rata di bawah 1 poin, yang mana sangat ideal untuk alat portabel. Model AI saat ini sengaja didesain konservatif (mencegah overfitting) sehingga sangat andal untuk peringatan dini (early warning) bagi pengguna.
+            <h5 style="color: #d35400;"><i class="fas fa-stethoscope"></i> Basis Ilmiah & Konfigurasi Sampling</h5>
+            Memadukan ekor serapan purin tepi UV-Violet <strong>410 nm &amp; 435 nm</strong> (Lin et al., 2022) dengan penetrasi jaringan NIR <strong>760 nm, 810 nm, 900 nm, dan 940 nm</strong> (Umar &amp; Alyah, 2020; Sumarti et al., 2024) setelah membuang 2 frame transien awal.
         </div>
     </div>
 </div>
 
+<!-- KARTU 3: KOLESTEROL -->
 <div class="eval-card theme-koles">
-    <div class="eval-header" style="display: flex; justify-content: space-between; align-items: center;">
+    <div class="eval-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
         <div style="display: flex; align-items: center; gap: 15px;">
             <i class="fas fa-heartbeat"></i>
             <div>
-                <span style="font-size: 0.8rem; text-transform: uppercase; opacity: 0.9;">Laporan Evaluasi Non-Invasive</span>
-                <h3>KOLESTEROL</h3>
+                <span style="font-size: 0.8rem; text-transform: uppercase; opacity: 0.9;">Kanal Aktif: R(610), S(680), V(810), W(860), L(940)</span>
+                <h3>KOLESTEROL TOTAL</h3>
             </div>
         </div>
         <div>
-            {% if metrics.kolesterol.is_live %}
-                <span style="background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600;"><i class="fas fa-bolt"></i> Kalkulasi Live CSV</span>
-            {% else %}
-                <span style="background: rgba(0,0,0,0.15); padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-style: italic;"><i class="fas fa-history"></i> Benchmark Standar</span>
-            {% endif %}
+            <span style="background: rgba(255,255,255,0.22); padding: 4px 11px; border-radius: 20px; font-size: 0.76rem; font-weight: 600;">
+                <i class="fas fa-database"></i> {{ metrics.kolesterol.source_label }}
+            </span>
         </div>
     </div>
     <div class="eval-body">
@@ -172,7 +236,7 @@
                 <div class="metric-value">± {{ metrics.kolesterol.mae }} <small style="font-size: 0.5em; font-weight:normal;">mg/dL</small></div>
             </div>
             <div class="metric-item">
-                <div class="metric-label">Metrik Model AI (R²)</div>
+                <div class="metric-label">Koefisien Determinasi (R²)</div>
                 <div class="metric-value">{{ metrics.kolesterol.r2 }}</div>
             </div>
             <div class="metric-item">
@@ -181,9 +245,248 @@
             </div>
         </div>
         <div class="eval-conclusion">
-            <h5><i class="fas fa-stethoscope"></i> Kesimpulan Tahap 1 & Analisis Klinis</h5>
-            Deteksi kolesterol secara optik merupakan parameter tersulit secara medis. Pencapaian akurasi ~90% di tahap prototipe ini adalah keberhasilan masif. Deviasi pembacaan masih berada di batas toleransi aman untuk keperluan <em>Early Screening</em> (mengklasifikasikan pengguna di zona Aman, Waspada, atau Bahaya).
+            <h5><i class="fas fa-stethoscope"></i> Basis Ilmiah & Konfigurasi Sampling</h5>
+            Menggunakan 3 prediktor utama <em>Random Forest</em> <strong>610 nm, 680 nm, dan 860 nm</strong> (Arnita et al., 2026) dikombinasikan dengan serapan ikatan hidrokarbon C–H lipid pada <strong>940 nm</strong> (Umar et al., 2020) dan filter outlier IQR per kanal.
         </div>
     </div>
 </div>
+
+<!-- PANEL MANAJEMEN GROUND-TRUTH & DATASET MACHINE LEARNING -->
+<div class="ml-panel-card no-print">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+        <div>
+            <h3 style="margin:0; color:#0f172a;"><i class="fas fa-brain" style="color:#2563eb;"></i> Dataset Raw Sensor &amp; Ground-Truth Machine Learning</h3>
+            <p style="margin:4px 0 0; font-size:0.88rem; color:#64748b;">
+                Setiap pengukuran menyimpan <strong>vektor 18-kanal bersih (IQR)</strong> di <code>raw_values</code> serta <strong>matriks seluruh frame (~22×18)</strong> di <code>raw_frames</code>. Isi kolom <strong>Ground-Truth</strong> dengan hasil alat strip/lab untuk melatih model ML.
+            </p>
+        </div>
+    </div>
+
+    <div class="ml-stats-row">
+        <div class="ml-stat-box">
+            <div class="lbl">Total Rekaman AS7265x</div>
+            <div class="val">{{ dataset_stats.total_spektro }}</div>
+        </div>
+        <div class="ml-stat-box" style="border-color:#86efac; background:#f0fdf4;">
+            <div class="lbl" style="color:#166534;">Total Berlabel Ground-Truth</div>
+            <div class="val" style="color:#15803d;">{{ dataset_stats.total_labeled }}</div>
+        </div>
+        <div class="ml-stat-box">
+            <div class="lbl">GT Gula Darah</div>
+            <div class="val">{{ dataset_stats.gula_labeled }} <small style="font-size:0.72rem; font-weight:600; color:#64748b;">sampel</small></div>
+            {% if dataset_stats.models.gula_darah %}
+                <small style="color:#16a34a; font-weight:700;"><i class="fas fa-check-circle"></i> Model ML Aktif ({{ dataset_stats.models.gula_darah.n_samples }} GT)</small>
+            {% endif %}
+        </div>
+        <div class="ml-stat-box">
+            <div class="lbl">GT Kolesterol</div>
+            <div class="val">{{ dataset_stats.kol_labeled }} <small style="font-size:0.72rem; font-weight:600; color:#64748b;">sampel</small></div>
+            {% if dataset_stats.models.kolesterol %}
+                <small style="color:#16a34a; font-weight:700;"><i class="fas fa-check-circle"></i> Model ML Aktif ({{ dataset_stats.models.kolesterol.n_samples }} GT)</small>
+            {% endif %}
+        </div>
+        <div class="ml-stat-box">
+            <div class="lbl">GT Asam Urat</div>
+            <div class="val">{{ dataset_stats.urat_labeled }} <small style="font-size:0.72rem; font-weight:600; color:#64748b;">sampel</small></div>
+            {% if dataset_stats.models.asam_urat %}
+                <small style="color:#16a34a; font-weight:700;"><i class="fas fa-check-circle"></i> Model ML Aktif ({{ dataset_stats.models.asam_urat.n_samples }} GT)</small>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="ml-toolbar">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <a href="/api/ml_dataset/export_csv?sensor_type=spektro&labeled_only=0" class="ml-btn ml-btn-blue">
+                <i class="fas fa-download"></i> CSV Semua Spektro (18 Kanal + L2)
+            </a>
+            <a href="/api/ml_dataset/export_csv?sensor_type=spektro&labeled_only=1" class="ml-btn ml-btn-green">
+                <i class="fas fa-check-double"></i> CSV Siap Latih (Hanya Ground-Truth)
+            </a>
+            <a href="/api/ml_dataset/export_json" class="ml-btn ml-btn-slate">
+                <i class="fas fa-code"></i> JSON Full Time-Series (N×18 Frame)
+            </a>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="ml-btn ml-btn-amber btn-train-ml" data-target="gula_darah">
+                <i class="fas fa-cogs"></i> Latih ML Gula
+            </button>
+            <button type="button" class="ml-btn ml-btn-amber btn-train-ml" data-target="kolesterol">
+                <i class="fas fa-cogs"></i> Latih ML Kolesterol
+            </button>
+            <button type="button" class="ml-btn ml-btn-amber btn-train-ml" data-target="asam_urat">
+                <i class="fas fa-cogs"></i> Latih ML Asam Urat
+            </button>
+        </div>
+    </div>
+
+    <div class="gt-table-wrap">
+        <table class="gt-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Waktu</th>
+                    <th>Pasien</th>
+                    <th>Sensor / Parameter</th>
+                    <th>Sampling</th>
+                    <th>Raw 18 Kanal</th>
+                    <th>Prediksi Alat</th>
+                    <th>Nilai Ground-Truth (Standar)</th>
+                    <th>Sumber Alat</th>
+                    <th>Error</th>
+                    <th>Aksi</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if raw_records %}
+                    {% for r in raw_records %}
+                    <tr data-row-id="{{ r.id }}">
+                        <td><strong>#{{ r.id }}</strong></td>
+                        <td style="white-space:nowrap;">{{ r.created_at }}</td>
+                        <td>{{ r.patient_name }}</td>
+                        <td>
+                            {% if 'gula' in r.sensor_type %}
+                                <span class="badge-stype stype-gula">{{ r.sensor_type }}</span>
+                            {% elif 'kolesterol' in r.sensor_type %}
+                                <span class="badge-stype stype-kol">{{ r.sensor_type }}</span>
+                            {% elif 'asam_urat' in r.sensor_type %}
+                                <span class="badge-stype stype-urat">{{ r.sensor_type }}</span>
+                            {% else %}
+                                <span class="badge-stype stype-other">{{ r.sensor_type }}</span>
+                            {% endif %}
+                        </td>
+                        <td style="white-space:nowrap; font-size:0.8rem; color:#475569;">
+                            {% if r.sampling_hz != '-' %}
+                                {{ r.valid_frames }}/{{ r.total_frames }} fr @ {{ r.sampling_hz }} Hz
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button type="button" class="ml-btn ml-btn-slate btn-view-raw" style="padding:4px 9px; font-size:0.75rem;" data-raw='{{ r.raw_values | tojson | safe }}' data-id="{{ r.id }}">
+                                <i class="fas fa-eye"></i> Lihat
+                            </button>
+                        </td>
+                        <td><strong>{{ r.predicted_value if r.predicted_value is not none else '-' }}</strong></td>
+                        <td>
+                            <input type="number" step="0.1" class="gt-inline-input" value="{{ r.ground_truth_value if r.ground_truth_value is not none else '' }}" placeholder="Isi GT...">
+                        </td>
+                        <td>
+                            <select class="gt-inline-src">
+                                <option value="EasyTouch GCU" {% if r.ground_truth_source == 'EasyTouch GCU' %}selected{% endif %}>EasyTouch GCU</option>
+                                <option value="Autocheck 3in1" {% if r.ground_truth_source == 'Autocheck 3in1' %}selected{% endif %}>Autocheck 3in1</option>
+                                <option value="Accu-Chek" {% if r.ground_truth_source == 'Accu-Chek' %}selected{% endif %}>Accu-Chek</option>
+                                <option value="Lab Klinik" {% if r.ground_truth_source == 'Lab Klinik' %}selected{% endif %}>Lab Klinik</option>
+                                <option value="Omron / Standar" {% if r.ground_truth_source == 'Omron / Standar' %}selected{% endif %}>Omron / Standar</option>
+                            </select>
+                        </td>
+                        <td class="cell-abs-err" style="font-weight:700; color:{% if r.abs_error is not none and r.abs_error <= 15 %}#16a34a{% elif r.abs_error is not none %}#dc2626{% else %}#94a3b8{% endif %};">
+                            {% if r.abs_error is not none %}±{{ r.abs_error }}{% else %}-{% endif %}
+                        </td>
+                        <td>
+                            <button type="button" class="ml-btn ml-btn-green btn-save-row-gt" style="padding:5px 10px; font-size:0.78rem;">
+                                <i class="fas fa-save"></i> Simpan
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="11" style="text-align:center; padding:24px; color:#64748b;">
+                            Belum ada rekaman <code>raw_sensor_data</code>. Lakukan pengukuran pasien untuk mulai mengumpulkan data spektral.
+                        </td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Modal Preview 18 Kanal -->
+<div id="rawPreviewModal" class="modal-overlay no-print" style="display:none; z-index:2500;">
+    <div class="modal-content" style="max-width:560px; text-align:left;">
+        <h3 id="rawPreviewTitle" style="margin-bottom:10px;">Detail Raw Data Sensor</h3>
+        <div id="rawPreviewBody" style="max-height:360px; overflow-y:auto; background:#0f172a; color:#bbf7d0; padding:14px; border-radius:10px; font-family:monospace; font-size:0.84rem;"></div>
+        <div style="margin-top:14px; text-align:right;">
+            <button type="button" onclick="$('#rawPreviewModal').hide()" class="btn-modal btn-secondary">Tutup</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    $(document).ready(function () {
+        const CH_NAMES = {{ channel_names | tojson | safe }};
+
+        $(".btn-view-raw").on("click", function () {
+            const id = $(this).data("id");
+            const raw = $(this).data("raw");
+            $("#rawPreviewTitle").text(`Detail Raw Sensor #${id}`);
+            if (Array.isArray(raw) && raw.length === 18) {
+                let lines = raw.map((v, idx) => `[${String(idx).padStart(2, '0')}] ${CH_NAMES[idx].padEnd(6, ' ')} : ${v}`);
+                $("#rawPreviewBody").html(lines.join("<br>"));
+            } else {
+                $("#rawPreviewBody").text(JSON.stringify(raw, null, 2));
+            }
+            $("#rawPreviewModal").css("display", "flex");
+        });
+
+        $(".btn-save-row-gt").on("click", function () {
+            const btn = $(this);
+            const tr = btn.closest("tr");
+            const logId = tr.data("row-id");
+            const gtVal = tr.find(".gt-inline-input").val().trim();
+            const gtSrc = tr.find(".gt-inline-src").val();
+
+            btn.prop("disabled", true).html('<i class="fas fa-spinner fa-spin"></i>');
+            $.ajax({
+                url: `/api/raw_sensor_data/${logId}/ground_truth`,
+                type: "POST",
+                contentType: "application/json",
+                data: JSON.stringify({
+                    ground_truth_value: gtVal === "" ? null : parseFloat(gtVal),
+                    ground_truth_source: gtSrc
+                }),
+                success: function (res) {
+                    const errCell = tr.find(".cell-abs-err");
+                    if (res.abs_error !== null && res.abs_error !== undefined) {
+                        errCell.text(`±${res.abs_error}`).css("color", res.abs_error <= 15 ? "#16a34a" : "#dc2626");
+                    } else {
+                        errCell.text("-").css("color", "#94a3b8");
+                    }
+                    btn.html('<i class="fas fa-check"></i> Tersimpan');
+                    setTimeout(() => { btn.prop("disabled", false).html('<i class="fas fa-save"></i> Simpan'); }, 1200);
+                },
+                error: function (xhr) {
+                    const msg = (xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : "Gagal menyimpan.";
+                    alert("⚠️ " + msg);
+                    btn.prop("disabled", false).html('<i class="fas fa-save"></i> Simpan');
+                }
+            });
+        });
+
+        $(".btn-train-ml").on("click", function () {
+            const btn = $(this);
+            const target = btn.data("target");
+            const oriHtml = btn.html();
+            btn.prop("disabled", true).html('<i class="fas fa-spinner fa-spin"></i> Melatih...');
+
+            $.ajax({
+                url: "/api/ml_dataset/train_model",
+                type: "POST",
+                contentType: "application/json",
+                data: JSON.stringify({ target: target }),
+                success: function (res) {
+                    alert("✅ " + res.message);
+                    window.location.reload();
+                },
+                error: function (xhr) {
+                    const msg = (xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : "Gagal melatih model ML.";
+                    alert("ℹ️ " + msg);
+                    btn.prop("disabled", false).html(oriHtml);
+                }
+            });
+        });
+    });
+</script>
 {% endblock %}

@@ -115,12 +115,26 @@ def init_database_and_defaults():
                 CREATE TABLE IF NOT EXISTS raw_sensor_data (
                     id SERIAL PRIMARY KEY,
                     patient_id INT REFERENCES patients(id) ON DELETE SET NULL,
+                    measurement_id INT REFERENCES measurements(id) ON DELETE SET NULL,
                     sensor_type VARCHAR(50) NOT NULL,
                     raw_values JSONB,
+                    raw_frames JSONB,
+                    context_features JSONB,
                     predicted_value FLOAT,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    ground_truth_value FLOAT,
+                    ground_truth_source VARCHAR(100),
+                    notes TEXT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE
                 );
             """)
+            cur.execute("ALTER TABLE raw_sensor_data ADD COLUMN IF NOT EXISTS measurement_id INT REFERENCES measurements(id) ON DELETE SET NULL;")
+            cur.execute("ALTER TABLE raw_sensor_data ADD COLUMN IF NOT EXISTS raw_frames JSONB;")
+            cur.execute("ALTER TABLE raw_sensor_data ADD COLUMN IF NOT EXISTS context_features JSONB;")
+            cur.execute("ALTER TABLE raw_sensor_data ADD COLUMN IF NOT EXISTS ground_truth_value FLOAT;")
+            cur.execute("ALTER TABLE raw_sensor_data ADD COLUMN IF NOT EXISTS ground_truth_source VARCHAR(100);")
+            cur.execute("ALTER TABLE raw_sensor_data ADD COLUMN IF NOT EXISTS notes TEXT;")
+            cur.execute("ALTER TABLE raw_sensor_data ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE;")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS system_config (
                     key VARCHAR(50) PRIMARY KEY,
@@ -169,24 +183,46 @@ def init_database_and_defaults():
             time.sleep(2)
 
 
-def save_raw_sensor_log(sensor_type, raw_vals, predicted_val):
+def save_raw_sensor_log(sensor_type, raw_vals, predicted_val, raw_frames=None):
     if not active_patient_id:
-        return
+        return None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        ctx = {}
+        try:
+            cur.execute("SELECT umur, jenis_kelamin FROM patients WHERE id = %s", (active_patient_id,))
+            prow = cur.fetchone()
+            if prow:
+                ctx = {"umur": prow[0], "jenis_kelamin": prow[1]}
+        except Exception:
+            pass
+
         cur.execute(
             """
-            INSERT INTO raw_sensor_data (patient_id, sensor_type, raw_values, predicted_value)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO raw_sensor_data (
+                patient_id, sensor_type, raw_values, raw_frames, context_features, predicted_value
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
-            (active_patient_id, sensor_type, json.dumps(raw_vals), float(predicted_val))
+            (
+                active_patient_id,
+                sensor_type,
+                json.dumps(raw_vals),
+                json.dumps(raw_frames) if raw_frames is not None else None,
+                json.dumps(ctx) if ctx else None,
+                float(predicted_val)
+            )
         )
+        new_id = cur.fetchone()[0]
         conn.commit()
         cur.close()
         conn.close()
+        return new_id
     except Exception as e:
         print(f"[RAW LOG WARN] {e}")
+        return None
 
 
 # ── Printer Thermal ESC/POS ──────────────────────────────────
@@ -297,11 +333,12 @@ def on_mqtt_message(client, userdata, msg):
     status = data.get("status")
     target_mode = data.get("target_mode", "")
 
-    # 1. Progress 5-detik dari sensor_publisher Kopersakti
+    # 1. Progress pemindaian dari sensor_publisher Kopersakti
     if status == "scanning":
         socketio.emit("measurement_progress", {
             "remaining": data.get("remaining", 0),
-            "progress": data.get("progress", 0)
+            "progress": data.get("progress", 0),
+            "frames_collected": data.get("frames_collected")
         })
         return
 
@@ -316,8 +353,19 @@ def on_mqtt_message(client, userdata, msg):
     # 3. Hasil Sensor Suhu MLX90614 (medical/suhu)
     if topic == "medical/suhu" and status == "done":
         val = float(data.get("objek", 0))
-        save_raw_sensor_log("suhu_mlx90614", data.get("samples", []), val)
-        socketio.emit("measurement_update", {"type": "suhu", "value": val})
+        samples = data.get("samples", [])
+        log_id = save_raw_sensor_log(
+            "suhu_mlx90614",
+            samples,
+            val,
+            raw_frames={
+                "ambient": data.get("ambient"),
+                "n_samples": len(samples),
+                "sampling_hz": 1.0,
+                "duration_sec": 5.0
+            }
+        )
+        socketio.emit("measurement_update", {"type": "suhu", "value": val, "raw_log_id": log_id})
         return
 
     # 4. Hasil Sensor PPG MAX30102 (medical/spo2 -> Tensi, SpO2, BPM)
@@ -326,19 +374,36 @@ def on_mqtt_message(client, userdata, msg):
         bpm_val  = data.get("bpm")
         sys_val  = data.get("sys")
         dia_val  = data.get("dia")
+        raw_ppg  = data.get("raw_ppg") or {}
+
+        log_id = save_raw_sensor_log(
+            "ppg_max30102",
+            {
+                "sys": sys_val,
+                "dia": dia_val,
+                "bpm": bpm_val,
+                "spo2": spo2_val,
+                "dc_red": raw_ppg.get("dc_red"),
+                "dc_ir": raw_ppg.get("dc_ir"),
+                "n_samples": raw_ppg.get("n_samples"),
+                "sampling_hz": raw_ppg.get("sampling_hz")
+            },
+            float(spo2_val or 0),
+            raw_frames=raw_ppg
+        )
 
         if target_mode in ("tensi", "tekanan", "ppg_all"):
             socketio.emit("measurement_update", {
                 "type": "tensi",
                 "sys": sys_val,
                 "dia": dia_val,
-                "pulse": bpm_val
+                "pulse": bpm_val,
+                "raw_log_id": log_id
             })
         if target_mode in ("spo2", "ppg_all"):
-            socketio.emit("measurement_update", {"type": "spo2", "value": spo2_val})
+            socketio.emit("measurement_update", {"type": "spo2", "value": spo2_val, "raw_log_id": log_id})
         if target_mode in ("bpm", "ppg_all"):
-            socketio.emit("measurement_update", {"type": "bpm", "value": bpm_val})
-        save_raw_sensor_log("ppg_max30102", {"sys": sys_val, "dia": dia_val, "bpm": bpm_val}, float(spo2_val or 0))
+            socketio.emit("measurement_update", {"type": "bpm", "value": bpm_val, "raw_log_id": log_id})
         return
 
     # 5. Hasil Sensor Spektroskopi 18-Kanal AS7265x (medical/spektro -> Gula, Kolesterol, Asam Urat)
@@ -347,16 +412,39 @@ def on_mqtt_message(client, userdata, msg):
         kol_val  = float(data.get("kolesterol", 0))
         urat_val = float(data.get("asam_urat", 0))
         raw_18   = data.get("raw_18ch", [])
+        raw_meta = data.get("raw_meta") or {}
+
+        sampling_info = {
+            "sampling_hz": raw_meta.get("sampling_hz", 0),
+            "valid_frames": raw_meta.get("valid_frames", 0),
+            "total_frames": raw_meta.get("total_frames", 0),
+            "model_source": raw_meta.get("model_source", {})
+        }
 
         if target_mode in ("gula_darah", "gula", "spektro_all", "spektro"):
-            socketio.emit("prediction_result", {"type": "gula_darah", "value": gula_val})
-            save_raw_sensor_log("gula_as7265x", raw_18, gula_val)
+            lid_g = save_raw_sensor_log("gula_as7265x", raw_18, gula_val, raw_frames=raw_meta)
+            socketio.emit("prediction_result", {
+                "type": "gula_darah",
+                "value": gula_val,
+                "raw_log_id": lid_g,
+                **sampling_info
+            })
         if target_mode in ("cholesterol", "kolesterol", "spektro_all", "spektro"):
-            socketio.emit("prediction_result", {"type": "cholesterol", "value": kol_val})
-            save_raw_sensor_log("kolesterol_as7265x", raw_18, kol_val)
+            lid_k = save_raw_sensor_log("kolesterol_as7265x", raw_18, kol_val, raw_frames=raw_meta)
+            socketio.emit("prediction_result", {
+                "type": "cholesterol",
+                "value": kol_val,
+                "raw_log_id": lid_k,
+                **sampling_info
+            })
         if target_mode in ("asam_urat", "spektro_all", "spektro"):
-            socketio.emit("prediction_result", {"type": "asam_urat", "value": urat_val})
-            save_raw_sensor_log("asam_urat_as7265x", raw_18, urat_val)
+            lid_u = save_raw_sensor_log("asam_urat_as7265x", raw_18, urat_val, raw_frames=raw_meta)
+            socketio.emit("prediction_result", {
+                "type": "asam_urat",
+                "value": urat_val,
+                "raw_log_id": lid_u,
+                **sampling_info
+            })
         return
 
     # 6. Hasil BLE Tinggi & Berat Badan (akm/prediction_data)
@@ -728,6 +816,7 @@ def handle_save_session(data):
                 height, weight, measured_at
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            RETURNING id
             """,
             (
                 patient_id, user_id,
@@ -737,8 +826,38 @@ def handle_save_session(data):
                 height, weight
             )
         )
+        measurement_id = cur.fetchone()[0]
+
+        # Tautkan raw_sensor_data pada sesi ini ke measurement_id & perkaya fitur konteks fisiologis untuk ML
+        raw_log_ids = data.get("raw_log_ids") or {}
+        id_list = [int(v) for v in raw_log_ids.values() if v]
+        if id_list:
+            cur.execute("SELECT umur, jenis_kelamin FROM patients WHERE id = %s", (patient_id,))
+            pinfo = cur.fetchone()
+            session_ctx = {
+                "umur": pinfo[0] if pinfo else None,
+                "jenis_kelamin": pinfo[1] if pinfo else None,
+                "suhu": temp_val if temp_val > 0 else None,
+                "spo2": spo2_val if spo2_val > 0 else None,
+                "bpm": bp_pulse if bp_pulse > 0 else None,
+                "sys": bp_sys if bp_sys > 0 else None,
+                "dia": bp_dia if bp_dia > 0 else None,
+                "height": height if height > 0 else None,
+                "weight": weight if weight > 0 else None
+            }
+            cur.execute(
+                """
+                UPDATE raw_sensor_data
+                SET measurement_id = %s,
+                    context_features = %s,
+                    updated_at = NOW()
+                WHERE id = ANY(%s)
+                """,
+                (measurement_id, json.dumps(session_ctx), id_list)
+            )
+
         conn.commit()
-        emit("save_status", {"status": "success", "message": "Data sesi pengukuran berhasil disimpan ke database!"})
+        emit("save_status", {"status": "success", "measurement_id": measurement_id, "message": "Data sesi pengukuran & rekaman raw sensor ML berhasil disimpan ke database!"})
     except Exception as e:
         conn.rollback()
         print(f"[SAVE ERR] {e}")
@@ -1725,16 +1844,362 @@ def system_reboot():
             return jsonify({"status": "error", "message": f"Gagal reboot: {e2}"}), 500
 
 
+SPECTRAL_18_CHANNELS = [
+    "A_410", "B_435", "C_460", "D_485", "E_510", "F_535",
+    "G_560", "H_585", "R_610", "I_645", "S_680", "J_705",
+    "T_730", "U_760", "V_810", "W_860", "K_900", "L_940"
+]
+
+TARGET_TO_SENSOR_TYPE = {
+    "gula_darah": "gula_as7265x",
+    "kolesterol": "kolesterol_as7265x",
+    "asam_urat":  "asam_urat_as7265x"
+}
+
+
+@app.route("/api/raw_sensor_data/<int:log_id>/ground_truth", methods=["POST"])
+def update_raw_ground_truth(log_id):
+    if g.user is None:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    gt_raw = payload.get("ground_truth_value")
+    gt_source = (payload.get("ground_truth_source") or "").strip() or None
+    notes = (payload.get("notes") or "").strip() or None
+
+    if gt_raw in (None, ""):
+        gt_val = None
+    else:
+        try:
+            gt_val = float(gt_raw)
+        except ValueError:
+            return jsonify({"status": "error", "message": "Nilai ground-truth harus berupa angka."}), 400
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE raw_sensor_data
+            SET ground_truth_value = %s,
+                ground_truth_source = COALESCE(%s, ground_truth_source),
+                notes = COALESCE(%s, notes),
+                updated_at = NOW()
+            WHERE id = %s
+            RETURNING id, sensor_type, predicted_value, ground_truth_value, ground_truth_source, notes
+            """,
+            (gt_val, gt_source, notes, log_id)
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            return jsonify({"status": "error", "message": "Rekaman raw_sensor_data tidak ditemukan."}), 404
+        conn.commit()
+        pred_v = row[2]
+        abs_err = round(abs(float(pred_v) - float(gt_val)), 2) if (pred_v is not None and gt_val is not None) else None
+        return jsonify({
+            "status": "success",
+            "id": row[0],
+            "sensor_type": row[1],
+            "predicted_value": pred_v,
+            "ground_truth_value": row[3],
+            "ground_truth_source": row[4],
+            "notes": row[5],
+            "abs_error": abs_err,
+            "message": "Nilai pembanding (Ground-Truth) berhasil disimpan untuk dataset Machine Learning."
+        })
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"status": "error", "message": f"Gagal menyimpan Ground-Truth: {e}"}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.route("/api/ml_dataset/export_csv")
+def export_ml_dataset_csv():
+    if g.user is None or g.user[2] != "admin":
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+    sensor_filter = request.args.get("sensor_type", "spektro").strip()
+    labeled_only = request.args.get("labeled_only", "0") == "1"
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        where_clauses = []
+        params = []
+        if sensor_filter == "spektro":
+            where_clauses.append("r.sensor_type IN ('gula_as7265x', 'kolesterol_as7265x', 'asam_urat_as7265x')")
+        elif sensor_filter != "all":
+            where_clauses.append("r.sensor_type = %s")
+            params.append(sensor_filter)
+
+        if labeled_only:
+            where_clauses.append("r.ground_truth_value IS NOT NULL")
+
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        cur.execute(
+            f"""
+            SELECT r.id, r.created_at, r.patient_id, COALESCE(p.nama_lengkap, '-'),
+                   p.umur, p.jenis_kelamin, r.measurement_id, r.sensor_type,
+                   r.raw_values, r.raw_frames, r.context_features,
+                   r.predicted_value, r.ground_truth_value, r.ground_truth_source, r.notes
+            FROM raw_sensor_data r
+            LEFT JOIN patients p ON p.id = r.patient_id
+            {where_sql}
+            ORDER BY r.id DESC
+            """,
+            tuple(params)
+        )
+        rows = cur.fetchall()
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        l2_cols = [f"L2_{c}" for c in SPECTRAL_18_CHANNELS]
+        header = (
+            [
+                "id", "created_at", "patient_id", "patient_name", "umur", "jenis_kelamin",
+                "measurement_id", "sensor_type", "valid_frames", "total_frames", "sampling_hz"
+            ]
+            + SPECTRAL_18_CHANNELS
+            + l2_cols
+            + [
+                "suhu_c", "spo2_pct", "bpm", "sys_mmhg", "dia_mmhg",
+                "predicted_value", "ground_truth_value", "ground_truth_source", "abs_error", "notes"
+            ]
+        )
+        writer.writerow(header)
+
+        for row in rows:
+            rid, cat, pid, pname, pumur, pjk, mid, stype, rvals, rframes, ctx, pred, gt, gtsrc, notes = row
+            rvals = rvals if isinstance(rvals, (list, dict)) else (json.loads(rvals) if rvals else [])
+            rframes = rframes if isinstance(rframes, dict) else (json.loads(rframes) if rframes else {})
+            ctx = ctx if isinstance(ctx, dict) else (json.loads(ctx) if ctx else {})
+
+            umur = ctx.get("umur") if ctx.get("umur") is not None else pumur
+            jk = ctx.get("jenis_kelamin") or pjk or ""
+
+            if isinstance(rvals, list) and len(rvals) == 18:
+                ch18 = [round(float(x), 3) for x in rvals]
+                l2_list = rframes.get("l2_norm_18ch")
+                if not l2_list or len(l2_list) != 18:
+                    norm = float(np.linalg.norm(ch18))
+                    l2_list = [round(float(x / norm), 5) for x in ch18] if norm > 1e-6 else [0.0] * 18
+            else:
+                ch18 = [""] * 18
+                l2_list = [""] * 18
+
+            v_frames = rframes.get("valid_frames") or rframes.get("n_samples") or ""
+            t_frames = rframes.get("total_frames") or rframes.get("n_samples") or ""
+            s_hz     = rframes.get("sampling_hz") or ""
+
+            abs_err = round(abs(float(pred) - float(gt)), 2) if (pred is not None and gt is not None) else ""
+            writer.writerow(
+                [
+                    rid,
+                    cat.strftime("%Y-%m-%d %H:%M:%S") if cat else "",
+                    pid or "",
+                    pname,
+                    umur if umur is not None else "",
+                    jk,
+                    mid or "",
+                    stype,
+                    v_frames,
+                    t_frames,
+                    s_hz
+                ]
+                + ch18
+                + l2_list
+                + [
+                    ctx.get("suhu") if ctx.get("suhu") is not None else "",
+                    ctx.get("spo2") if ctx.get("spo2") is not None else "",
+                    ctx.get("bpm") if ctx.get("bpm") is not None else "",
+                    ctx.get("sys") if ctx.get("sys") is not None else "",
+                    ctx.get("dia") if ctx.get("dia") is not None else "",
+                    pred if pred is not None else "",
+                    gt if gt is not None else "",
+                    gtsrc or "",
+                    abs_err,
+                    notes or ""
+                ]
+            )
+
+        suffix = "berlabel_gt" if labeled_only else "semua"
+        fname = f"akmv2_ml_dataset_{sensor_filter}_{suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        return Response(
+            output.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={fname}"}
+        )
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.route("/api/ml_dataset/export_json")
+def export_ml_dataset_json():
+    if g.user is None or g.user[2] != "admin":
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+    labeled_only = request.args.get("labeled_only", "0") == "1"
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        where_sql = "WHERE r.ground_truth_value IS NOT NULL" if labeled_only else ""
+        cur.execute(
+            f"""
+            SELECT r.id, r.created_at, r.patient_id, COALESCE(p.nama_lengkap, '-'),
+                   r.measurement_id, r.sensor_type, r.raw_values, r.raw_frames,
+                   r.context_features, r.predicted_value, r.ground_truth_value,
+                   r.ground_truth_source, r.notes
+            FROM raw_sensor_data r
+            LEFT JOIN patients p ON p.id = r.patient_id
+            {where_sql}
+            ORDER BY r.id DESC
+            LIMIT 1000
+            """
+        )
+        items = []
+        for row in cur.fetchall():
+            items.append({
+                "id": row[0],
+                "created_at": row[1].isoformat() if row[1] else None,
+                "patient_id": row[2],
+                "patient_name": row[3],
+                "measurement_id": row[4],
+                "sensor_type": row[5],
+                "channel_names": SPECTRAL_18_CHANNELS if "as7265x" in (row[5] or "") else None,
+                "raw_values": row[6],
+                "raw_frames": row[7],
+                "context_features": row[8],
+                "predicted_value": row[9],
+                "ground_truth_value": row[10],
+                "ground_truth_source": row[11],
+                "notes": row[12]
+            })
+        fname = f"akmv2_ml_timeseries_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        return Response(
+            json.dumps({"exported_at": datetime.now().isoformat(), "count": len(items), "records": items}, indent=2),
+            mimetype="application/json",
+            headers={"Content-Disposition": f"attachment; filename={fname}"}
+        )
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.route("/api/ml_dataset/train_model", methods=["POST"])
+def train_ml_from_ground_truth():
+    if g.user is None or g.user[2] != "admin":
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    target_key = payload.get("target", "").strip()
+    if target_key not in TARGET_TO_SENSOR_TYPE:
+        return jsonify({"status": "error", "message": "Target biomarker tidak valid."}), 400
+
+    sensor_type = TARGET_TO_SENSOR_TYPE[target_key]
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT raw_values, ground_truth_value
+            FROM raw_sensor_data
+            WHERE sensor_type = %s
+              AND ground_truth_value IS NOT NULL
+              AND raw_values IS NOT NULL
+            ORDER BY id ASC
+            """,
+            (sensor_type,)
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+    X_list, y_list = [], []
+    for rvals, gt in rows:
+        arr = rvals if isinstance(rvals, list) else (json.loads(rvals) if isinstance(rvals, str) else [])
+        if isinstance(arr, list) and len(arr) == 18 and gt is not None:
+            vec = np.array(arr, dtype=float)
+            norm = float(np.linalg.norm(vec))
+            l2 = (vec / norm) if norm > 1e-6 else np.zeros(18, dtype=float)
+            X_list.append(np.concatenate([vec, l2]))
+            y_list.append(float(gt))
+
+    n_samples = len(X_list)
+    if n_samples < 8:
+        return jsonify({
+            "status": "error",
+            "n_samples": n_samples,
+            "message": f"Baru tersedia {n_samples} data berlabel Ground-Truth untuk {target_key}. Kumpulkan minimal 8 sampel Ground-Truth agar model Machine Learning valid dan tidak overfitting."
+        }), 400
+
+    from sklearn.ensemble import RandomForestRegressor, VotingRegressor
+    from sklearn.linear_model import Ridge
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import Pipeline
+    from sklearn.model_selection import LeaveOneOut, KFold, cross_val_predict
+    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+    X = np.array(X_list, dtype=float)
+    y = np.array(y_list, dtype=float)
+
+    rf = RandomForestRegressor(n_estimators=150, max_depth=6, min_samples_leaf=2, random_state=42)
+    ridge_pipe = Pipeline([("scaler", StandardScaler()), ("ridge", Ridge(alpha=2.0))])
+    ensemble = VotingRegressor([("rf", rf), ("ridge", ridge_pipe)])
+
+    cv = LeaveOneOut() if n_samples < 20 else KFold(n_splits=5, shuffle=True, random_state=42)
+    y_cv_pred = cross_val_predict(ensemble, X, y, cv=cv)
+
+    cv_mae = float(mean_absolute_error(y, y_cv_pred))
+    cv_rmse = float(np.sqrt(mean_squared_error(y, y_cv_pred)))
+    cv_r2 = float(r2_score(y, y_cv_pred)) if np.std(y) > 1e-6 else 0.0
+    cv_mape = float(np.mean(np.abs((y - y_cv_pred) / (np.abs(y) + 1e-10))) * 100.0)
+    cv_acc = round(max(0.0, 100.0 - cv_mape), 2)
+
+    ensemble.fit(X, y)
+    os.makedirs(os.path.join(BASE_DIR, "model"), exist_ok=True)
+    model_path = os.path.join(BASE_DIR, "model", f"as7265x_{target_key}.joblib")
+    bundle = {
+        "model": ensemble,
+        "feature_mode": "raw18_plus_l2",
+        "target": target_key,
+        "sensor_type": sensor_type,
+        "n_samples": n_samples,
+        "trained_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "cv_metrics": {
+            "accuracy": cv_acc,
+            "mae": round(cv_mae, 2),
+            "rmse": round(cv_rmse, 2),
+            "r2": round(cv_r2, 4)
+        }
+    }
+    joblib.dump(bundle, model_path)
+
+    return jsonify({
+        "status": "success",
+        "target": target_key,
+        "n_samples": n_samples,
+        "metrics": bundle["cv_metrics"],
+        "trained_at": bundle["trained_at"],
+        "message": f"Model ML {target_key} berhasil dilatih dari {n_samples} sampel Ground-Truth (MAE CV: ±{cv_mae:.2f} mg/dL, Akurasi: {cv_acc}%) dan langsung aktif!"
+    })
+
+
 def hitung_evaluasi_data_science():
     import pandas as pd
     from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
     eval_results = {
-        "gula": {"accuracy": 98.71, "mae": 0.70, "r2": 0.9812, "rmse": 1.03, "is_live": False},
-        "asam_urat": {"accuracy": 84.01, "mae": 0.79, "r2": 0.4175, "rmse": 1.02, "is_live": False},
-        "kolesterol": {"accuracy": 89.50, "mae": 20.94, "r2": 0.4648, "rmse": 26.84, "is_live": False}
+        "gula": {"accuracy": 98.71, "mae": 0.70, "r2": 0.9812, "rmse": 1.03, "is_live": False, "source_label": "Benchmark Standar", "n_gt": 0},
+        "asam_urat": {"accuracy": 84.01, "mae": 0.79, "r2": 0.4175, "rmse": 1.02, "is_live": False, "source_label": "Benchmark Standar", "n_gt": 0},
+        "kolesterol": {"accuracy": 89.50, "mae": 20.94, "r2": 0.4648, "rmse": 26.84, "is_live": False, "source_label": "Benchmark Standar", "n_gt": 0}
     }
 
+    # Fallback CSV historis AKM jika belum ada Ground-Truth AS7265x di PostgreSQL
     try:
         csv_path = os.path.join(BASE_DIR, "data/adc_asam_urat_v3.csv")
         if os.path.exists(csv_path) and "asam_urat" in models_xgb and "asam_urat" in models_knn:
@@ -1746,13 +2211,14 @@ def hitung_evaluasi_data_science():
             rmse = np.sqrt(mean_squared_error(y_true, y_pred))
             r2 = r2_score(y_true, y_pred)
             mape = np.mean(np.abs((y_true - y_pred) / (y_true + 1e-10))) * 100
-            eval_results["asam_urat"] = {
+            eval_results["asam_urat"].update({
                 "accuracy": round(max(0.0, 100 - mape), 2),
                 "mae": round(mae, 2),
                 "r2": round(r2, 4),
                 "rmse": round(rmse, 2),
-                "is_live": True
-            }
+                "is_live": True,
+                "source_label": "Dataset CSV Awal"
+            })
     except Exception as e:
         print(f"[EVAL AU WARN] {e}")
 
@@ -1769,15 +2235,59 @@ def hitung_evaluasi_data_science():
             rmse = np.sqrt(mean_squared_error(y_true, y_pred))
             r2 = r2_score(y_true, y_pred)
             mape = np.mean(np.abs((y_true - y_pred) / (y_true + 1e-10))) * 100
-            eval_results["kolesterol"] = {
+            eval_results["kolesterol"].update({
                 "accuracy": round(max(0.0, 100 - mape), 2),
                 "mae": round(mae, 2),
                 "r2": round(r2, 4),
                 "rmse": round(rmse, 2),
-                "is_live": True
-            }
+                "is_live": True,
+                "source_label": "Dataset CSV Awal"
+            })
     except Exception as e:
         print(f"[EVAL KOL WARN] {e}")
+
+    # Prioritas Utama: Evaluasi Live dari data Ground-Truth AS7265x di PostgreSQL AKMv2
+    gt_mapping = [
+        ("gula", "gula_as7265x"),
+        ("asam_urat", "asam_urat_as7265x"),
+        ("kolesterol", "kolesterol_as7265x")
+    ]
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        for metric_key, stype in gt_mapping:
+            cur.execute(
+                """
+                SELECT predicted_value, ground_truth_value
+                FROM raw_sensor_data
+                WHERE sensor_type = %s
+                  AND predicted_value IS NOT NULL
+                  AND ground_truth_value IS NOT NULL
+                """,
+                (stype,)
+            )
+            pairs = cur.fetchall()
+            n_gt = len(pairs)
+            eval_results[metric_key]["n_gt"] = n_gt
+            if n_gt >= 2:
+                y_pred = np.array([float(p[0]) for p in pairs], dtype=float)
+                y_true = np.array([float(p[1]) for p in pairs], dtype=float)
+                mae = float(mean_absolute_error(y_true, y_pred))
+                rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+                r2 = float(r2_score(y_true, y_pred)) if np.std(y_true) > 1e-6 else 0.0
+                mape = float(np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-10))) * 100.0)
+                eval_results[metric_key].update({
+                    "accuracy": round(max(0.0, 100.0 - mape), 2),
+                    "mae": round(mae, 2),
+                    "r2": round(r2, 4),
+                    "rmse": round(rmse, 2),
+                    "is_live": True,
+                    "source_label": f"Live Ground-Truth AS7265x ({n_gt} sampel)"
+                })
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[EVAL PG GT WARN] {e}")
 
     return eval_results
 
@@ -1787,7 +2297,98 @@ def laporan_evaluasi():
     if g.user is None or g.user[2] != "admin":
         flash("Akses ditolak. Halaman ini khusus untuk Administrator.", "danger")
         return redirect(url_for("dashboard"))
-    return render_template("evaluation.html", metrics=hitung_evaluasi_data_science())
+
+    metrics = hitung_evaluasi_data_science()
+    dataset_stats = {
+        "total_spektro": 0,
+        "total_labeled": 0,
+        "gula_labeled": 0,
+        "kol_labeled": 0,
+        "urat_labeled": 0,
+        "models": {}
+    }
+    raw_records = []
+
+    for tkey in ("gula_darah", "kolesterol", "asam_urat"):
+        mpath = os.path.join(BASE_DIR, "model", f"as7265x_{tkey}.joblib")
+        if os.path.exists(mpath):
+            try:
+                b = joblib.load(mpath)
+                if isinstance(b, dict):
+                    dataset_stats["models"][tkey] = {
+                        "active": True,
+                        "n_samples": b.get("n_samples", 0),
+                        "trained_at": b.get("trained_at", "-"),
+                        "cv_metrics": b.get("cv_metrics", {})
+                    }
+            except Exception:
+                pass
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE sensor_type LIKE '%as7265x'),
+                COUNT(*) FILTER (WHERE sensor_type LIKE '%as7265x' AND ground_truth_value IS NOT NULL),
+                COUNT(*) FILTER (WHERE sensor_type = 'gula_as7265x' AND ground_truth_value IS NOT NULL),
+                COUNT(*) FILTER (WHERE sensor_type = 'kolesterol_as7265x' AND ground_truth_value IS NOT NULL),
+                COUNT(*) FILTER (WHERE sensor_type = 'asam_urat_as7265x' AND ground_truth_value IS NOT NULL)
+            FROM raw_sensor_data
+            """
+        )
+        srow = cur.fetchone()
+        if srow:
+            dataset_stats["total_spektro"] = srow[0] or 0
+            dataset_stats["total_labeled"] = srow[1] or 0
+            dataset_stats["gula_labeled"]  = srow[2] or 0
+            dataset_stats["kol_labeled"]   = srow[3] or 0
+            dataset_stats["urat_labeled"]  = srow[4] or 0
+
+        cur.execute(
+            """
+            SELECT r.id, r.created_at, COALESCE(p.nama_lengkap, 'Tanpa Nama'),
+                   r.sensor_type, r.raw_values, r.raw_frames,
+                   r.predicted_value, r.ground_truth_value, r.ground_truth_source, r.notes
+            FROM raw_sensor_data r
+            LEFT JOIN patients p ON p.id = r.patient_id
+            ORDER BY r.id DESC
+            LIMIT 80
+            """
+        )
+        for row in cur.fetchall():
+            rframes = row[5] if isinstance(row[5], dict) else (json.loads(row[5]) if row[5] else {})
+            pred_v = row[6]
+            gt_v = row[7]
+            abs_err = round(abs(float(pred_v) - float(gt_v)), 2) if (pred_v is not None and gt_v is not None) else None
+            raw_records.append({
+                "id": row[0],
+                "created_at": row[1].strftime("%d/%m/%Y %H:%M") if row[1] else "-",
+                "patient_name": row[2],
+                "sensor_type": row[3],
+                "raw_values": row[4],
+                "valid_frames": rframes.get("valid_frames") or rframes.get("n_samples") or "-",
+                "total_frames": rframes.get("total_frames") or rframes.get("n_samples") or "-",
+                "sampling_hz": rframes.get("sampling_hz") or "-",
+                "predicted_value": pred_v,
+                "ground_truth_value": gt_v,
+                "ground_truth_source": row[8] or "",
+                "notes": row[9] or "",
+                "abs_error": abs_err
+            })
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"[EVAL TABLE WARN] {e}")
+
+    return render_template(
+        "evaluation.html",
+        metrics=metrics,
+        dataset_stats=dataset_stats,
+        raw_records=raw_records,
+        channel_names=SPECTRAL_18_CHANNELS
+    )
 
 
 if __name__ == "__main__":
