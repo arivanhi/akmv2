@@ -1,0 +1,64 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: akmv2_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${DB_NAME:-health_monitoring_db}
+      POSTGRES_USER: ${DB_USER:-admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-akmv2_udinus_password}
+      TZ: Asia/Jakarta
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-admin} -d ${DB_NAME:-health_monitoring_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: akmv2_mqtt
+    restart: always
+    environment:
+      - TZ=Asia/Jakarta
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/#' -C 1 -i healthcheck -W 3 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    container_name: akmv2_web
+    network_mode: host
+    restart: always
+    privileged: true
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Jakarta
+    volumes:
+      - .:/app
+      - /var/run/dbus:/var/run/dbus
+      - /run/dbus:/run/dbus
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      mqtt:
+        condition: service_healthy
+
+  adminer:
+    image: adminer
+    container_name: akmv2_adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"

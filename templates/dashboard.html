@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard - Sistem Monitoring Kesehatan{% endblock %}
+{% block content %}
+<h1 class="page-title">Selamat Datang di Dashboard Koper Sakti</h1>
+<p style="margin-bottom: 25px;">Sistem Monitoring Kesehatan Terpadu (UI AKM + Sensor Optik I2C Kopersakti).</p>
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin-bottom: 30px;">
+    <div class="form-container" style="margin-bottom: 0; border-left: 5px solid #007bff;">
+        <p style="color: #666; font-size: 0.9rem; margin-bottom: 5px;">Total Pasien Terdaftar</p>
+        <h2 style="font-size: 2rem; color: #0056b3;">{{ stats.total_patients if stats else 0 }}</h2>
+    </div>
+    <div class="form-container" style="margin-bottom: 0; border-left: 5px solid #28a745;">
+        <p style="color: #666; font-size: 0.9rem; margin-bottom: 5px;">Total Sesi Pengukuran</p>
+        <h2 style="font-size: 2rem; color: #28a745;">{{ stats.total_measurements if stats else 0 }}</h2>
+    </div>
+    <div class="form-container" style="margin-bottom: 0; border-left: 5px solid #f39c12;">
+        <p style="color: #666; font-size: 0.9rem; margin-bottom: 5px;">Pengukuran Hari Ini</p>
+        <h2 style="font-size: 2rem; color: #d35400;">{{ stats.today_measurements if stats else 0 }}</h2>
+    </div>
+</div>
+
+<div class="form-container">
+    {% if g.user and g.user[2] == 'admin' %}
+    <p style="margin-bottom: 15px;">Sebagai <strong>Admin</strong>, Anda memiliki akses penuh ke pengukuran pasien, manajemen operator, kalibrasi sensor I2C, pengaturan WiFi, serta integrasi API Dinas Kesehatan.</p>
+    {% elif g.user and g.user[2] == 'operator' %}
+    <p style="margin-bottom: 15px;">Sebagai <strong>Operator</strong>, Anda dapat mendaftarkan pasien baru, melakukan pengukuran kesehatan, dan mengelola riwayat pengukuran.</p>
+    {% else %}
+    <p style="margin-bottom: 15px;">Selamat datang di Sistem Monitoring Kesehatan Koper Sakti.</p>
+    {% endif %}
+
+    <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-top: 15px;">
+        <a href="{{ url_for('input_pasien') }}" class="btn-submit" style="text-decoration: none; display: inline-flex; align-items: center; gap: 8px;">
+            <i class="fas fa-user-plus"></i> Daftar Pasien Baru
+        </a>
+        <a href="{{ url_for('measure') }}" class="btn-submit" style="background-color: #28a745; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;">
+            <i class="fas fa-heartbeat"></i> Mulai Pengukuran
+        </a>
+        <a href="{{ url_for('data_pengukuran') }}" class="btn-submit" style="background-color: #17a2b8; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;">
+            <i class="fas fa-chart-line"></i> Lihat Data Pengukuran
+        </a>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,573 @@
+{% extends 'base.html' %} 
+{% block title %}Pengaturan{% endblock %} 
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Pengaturan Sistem</h1>
+</div>
+
+<div class="form-container">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid #eee; padding-bottom: 10px;">
+        <h3 style="margin: 0; border: none;">Konfigurasi Endpoint API Dinas Kesehatan</h3>
+    </div>
+
+    <div style="background-color: #f0fff4; border: 1px solid #c3e6cb; border-left: 5px solid #28a745; padding: 15px; border-radius: 6px; margin-bottom: 25px;">
+        <div style="display: flex; align-items: start; gap: 15px;">
+            <div style="font-size: 1.5rem; color: #28a745;">
+                <i class="fas fa-satellite-dish"></i>
+            </div>
+            <div>
+                <small style="text-transform: uppercase; letter-spacing: 1px; color: #666; font-weight: 700; font-size: 0.75rem;">
+                    Endpoint Sedang Digunakan
+                </small>
+                <div style="font-family: 'Courier New', monospace; font-size: 1.1rem; font-weight: 600; color: #333; word-break: break-all; margin-top: 5px;">
+                    {% if current_api_url %}
+                        {{ current_api_url }}
+                    {% else %}
+                        <span style="color: #dc3545; font-style: italic;">(Belum ada URL yang diatur)</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="form-group" style="margin-bottom: 20px;">
+        <label style="font-weight: 600; margin-bottom: 8px; display: block;">Edit URL Baru</label>
+        <div style="display: flex; gap: 10px; align-items: stretch;">
+            <input type="text" id="apiUrlInput" class="form-control" value="{{ current_api_url or '' }}" placeholder="https://...">
+            <button id="btnSaveApi" class="btn-submit" style="white-space: nowrap; min-width: 110px; background-color: #007bff;">
+                <i class="fas fa-save"></i> Simpan
+            </button>
+        </div>
+    </div>
+
+    <div class="form-group" style="border-top: 1px solid #eee; padding-top: 15px;">
+        <label style="font-weight: 600; margin-bottom: 8px; display: block; color: #555;">Gunakan dari Riwayat</label>
+        <div style="display: flex; gap: 10px; align-items: stretch;">
+            <div style="flex: 1;">
+                <select id="apiHistorySelect" class="form-control" style="background: #f9f9f9;">
+                    <option value="">-- Pilih URL Lama --</option>
+                    {% for url in history_urls %}
+                        <option value="{{ url }}">{{ url }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button id="btnUseHistory" class="btn-submit" style="white-space: nowrap; min-width: 110px; background-color: #17a2b8;">
+                <i class="fas fa-check"></i> Pakai
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="form-container">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; border-bottom: 2px solid #f1f5f9; padding-bottom: 12px;">
+        <h3 style="margin: 0; border: none; padding: 0;">Cek Hardware & Sensor I2C</h3>
+        <button id="btnCheckI2C" class="btn-setting primary" style="flex: 0 0 auto; padding: 9px 18px;">
+            <i class="fas fa-sync-alt"></i> Cek Ulang Bus I2C
+        </button>
+    </div>
+
+    <div class="i2c-status-grid" id="i2cSensorBadges">
+        <div id="cardMlx" class="i2c-sensor-card disconnected">
+            <div class="i2c-sensor-icon"><i class="fas fa-thermometer-half"></i></div>
+            <div class="i2c-sensor-info">
+                <h5>MLX90614 Suhu (0x5A)</h5>
+                <span id="statusMlx">Memeriksa bus I2C...</span>
+            </div>
+        </div>
+        <div id="cardMax" class="i2c-sensor-card disconnected">
+            <div class="i2c-sensor-icon"><i class="fas fa-heartbeat"></i></div>
+            <div class="i2c-sensor-info">
+                <h5>MAX30102 Oximeter (0x57)</h5>
+                <span id="statusMax">Memeriksa bus I2C...</span>
+            </div>
+        </div>
+        <div id="cardAs7" class="i2c-sensor-card disconnected">
+            <div class="i2c-sensor-icon"><i class="fas fa-microscope"></i></div>
+            <div class="i2c-sensor-info">
+                <h5>AS7265x Spektro 18-Ch (0x49)</h5>
+                <span id="statusAs7">Memeriksa bus I2C...</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="settings-grid" style="margin-top: 10px;">
+        <div class="settings-card printer">
+            <div>
+                <div class="settings-header">
+                    <div class="settings-icon-wrapper"><i class="fas fa-print"></i></div>
+                    <div class="settings-title">
+                        <h4>Printer Thermal</h4>
+                        <p>Status & Koneksi Printer Struk</p>
+                    </div>
+                </div>
+                <p style="font-size: 0.9rem; color: #666; line-height: 1.5;">
+                    Gunakan menu ini jika printer tidak merespons atau baru dihubungkan ke port USB.
+                </p>
+            </div>
+            <div class="settings-actions">
+                <button id="btnReconnectPrinter" class="btn-setting warning"><i class="fas fa-plug"></i> Hubungkan Ulang</button>
+                <button id="btnTestPrint" class="btn-setting primary"><i class="fas fa-file-invoice"></i> Test Print</button>
+            </div>
+        </div>
+
+        <div class="settings-card bluetooth">
+            <div>
+                <div class="settings-header">
+                    <div class="settings-icon-wrapper"><i class="fab fa-bluetooth-b"></i></div>
+                    <div class="settings-title">
+                        <h4>Koneksi Bluetooth</h4>
+                        <p>Adapter BLE Timbangan Opsional</p>
+                    </div>
+                </div>
+                <p style="font-size: 0.9rem; color: #666; line-height: 1.5;">
+                    Pantau status koneksi timbangan BLE atau restart adapter Bluetooth perangkat.
+                </p>
+            </div>
+            <div class="settings-actions">
+                <div id="btStatusBadge" class="btn-setting outline" style="cursor: default; font-weight: 600;">Status: Checking...</div>
+                <button id="btnResetBt" class="btn-setting primary" style="background-color: #fff; color: #dc3545; border: 1px solid #dc3545; font-weight: 600;">Reset Bluetooth</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="form-container">
+    <div class="calib-section-header">
+        <div class="calib-title-group">
+            <div class="calib-title-icon">
+                <i class="fas fa-sliders-h"></i>
+            </div>
+            <div>
+                <h3>Kalibrasi Offset Sensor Kopersakti</h3>
+                <p>Sesuaikan koreksi offset (+/-) terhadap alat pembanding laboratorium; perubahan langsung aktif pada pengukuran berikutnya.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="calib-grid">
+        <div class="calib-card suhu">
+            <div class="calib-card-top">
+                <div class="calib-label-wrap">
+                    <div class="calib-mini-icon"><i class="fas fa-thermometer-half"></i></div>
+                    <div>
+                        <div class="calib-param-name">Suhu Tubuh</div>
+                        <span class="calib-chip-source">MLX90614 IR</span>
+                    </div>
+                </div>
+                <span class="calib-unit-badge">°C</span>
+            </div>
+            <div class="calib-stepper">
+                <button type="button" class="calib-step-btn" data-target="#cal_suhu_bias" data-step="-0.1">&minus;</button>
+                <input type="number" step="0.1" id="cal_suhu_bias" class="calib-input" value="{{ calib.suhu.bias if calib and calib.suhu else 0.0 }}">
+                <button type="button" class="calib-step-btn" data-target="#cal_suhu_bias" data-step="0.1">&plus;</button>
+            </div>
+        </div>
+
+        <div class="calib-card spo2">
+            <div class="calib-card-top">
+                <div class="calib-label-wrap">
+                    <div class="calib-mini-icon"><i class="fas fa-lungs"></i></div>
+                    <div>
+                        <div class="calib-param-name">Saturasi SpO2</div>
+                        <span class="calib-chip-source">MAX30102 PPG</span>
+                    </div>
+                </div>
+                <span class="calib-unit-badge">%</span>
+            </div>
+            <div class="calib-stepper">
+                <button type="button" class="calib-step-btn" data-target="#cal_spo2_bias" data-step="-0.5">&minus;</button>
+                <input type="number" step="0.5" id="cal_spo2_bias" class="calib-input" value="{{ calib.spo2.bias if calib and calib.spo2 else 0.0 }}">
+                <button type="button" class="calib-step-btn" data-target="#cal_spo2_bias" data-step="0.5">&plus;</button>
+            </div>
+        </div>
+
+        <div class="calib-card bpm">
+            <div class="calib-card-top">
+                <div class="calib-label-wrap">
+                    <div class="calib-mini-icon"><i class="fas fa-heartbeat"></i></div>
+                    <div>
+                        <div class="calib-param-name">Detak Jantung</div>
+                        <span class="calib-chip-source">MAX30102 PPG</span>
+                    </div>
+                </div>
+                <span class="calib-unit-badge">BPM</span>
+            </div>
+            <div class="calib-stepper">
+                <button type="button" class="calib-step-btn" data-target="#cal_bpm_bias" data-step="-1">&minus;</button>
+                <input type="number" step="1" id="cal_bpm_bias" class="calib-input" value="{{ calib.bpm.bias if calib and calib.bpm else 0.0 }}">
+                <button type="button" class="calib-step-btn" data-target="#cal_bpm_bias" data-step="1">&plus;</button>
+            </div>
+        </div>
+
+        <div class="calib-card tensi">
+            <div class="calib-card-top">
+                <div class="calib-label-wrap">
+                    <div class="calib-mini-icon"><i class="fas fa-stethoscope"></i></div>
+                    <div>
+                        <div class="calib-param-name">Tensi Sistolik</div>
+                        <span class="calib-chip-source">PWA SYS</span>
+                    </div>
+                </div>
+                <span class="calib-unit-badge">mmHg</span>
+            </div>
+            <div class="calib-stepper">
+                <button type="button" class="calib-step-btn" data-target="#cal_sys_bias" data-step="-1">&minus;</button>
+                <input type="number" step="1" id="cal_sys_bias" class="calib-input" value="{{ calib.tekanan_darah.sys_bias if calib and calib.tekanan_darah else 0.0 }}">
+                <button type="button" class="calib-step-btn" data-target="#cal_sys_bias" data-step="1">&plus;</button>
+            </div>
+        </div>
+
+        <div class="calib-card tensi">
+            <div class="calib-card-top">
+                <div class="calib-label-wrap">
+                    <div class="calib-mini-icon"><i class="fas fa-stethoscope"></i></div>
+                    <div>
+                        <div class="calib-param-name">Tensi Diastolik</div>
+                        <span class="calib-chip-source">PWA DIA</span>
+                    </div>
+                </div>
+                <span class="calib-unit-badge">mmHg</span>
+            </div>
+            <div class="calib-stepper">
+                <button type="button" class="calib-step-btn" data-target="#cal_dia_bias" data-step="-1">&minus;</button>
+                <input type="number" step="1" id="cal_dia_bias" class="calib-input" value="{{ calib.tekanan_darah.dia_bias if calib and calib.tekanan_darah else 0.0 }}">
+                <button type="button" class="calib-step-btn" data-target="#cal_dia_bias" data-step="1">&plus;</button>
+            </div>
+        </div>
+
+        <div class="calib-card gula">
+            <div class="calib-card-top">
+                <div class="calib-label-wrap">
+                    <div class="calib-mini-icon"><i class="fas fa-tint"></i></div>
+                    <div>
+                        <div class="calib-param-name">Gula Darah</div>
+                        <span class="calib-chip-source">AS7265x NIR</span>
+                    </div>
+                </div>
+                <span class="calib-unit-badge">mg/dL</span>
+            </div>
+            <div class="calib-stepper">
+                <button type="button" class="calib-step-btn" data-target="#cal_gula_bias" data-step="-1">&minus;</button>
+                <input type="number" step="1" id="cal_gula_bias" class="calib-input" value="{{ calib.gula_darah.bias if calib and calib.gula_darah else 0.0 }}">
+                <button type="button" class="calib-step-btn" data-target="#cal_gula_bias" data-step="1">&plus;</button>
+            </div>
+        </div>
+
+        <div class="calib-card kol">
+            <div class="calib-card-top">
+                <div class="calib-label-wrap">
+                    <div class="calib-mini-icon"><i class="fas fa-wave-square"></i></div>
+                    <div>
+                        <div class="calib-param-name">Kolesterol</div>
+                        <span class="calib-chip-source">AS7265x Vis/NIR</span>
+                    </div>
+                </div>
+                <span class="calib-unit-badge">mg/dL</span>
+            </div>
+            <div class="calib-stepper">
+                <button type="button" class="calib-step-btn" data-target="#cal_kol_bias" data-step="-1">&minus;</button>
+                <input type="number" step="1" id="cal_kol_bias" class="calib-input" value="{{ calib.kolesterol.bias if calib and calib.kolesterol else 0.0 }}">
+                <button type="button" class="calib-step-btn" data-target="#cal_kol_bias" data-step="1">&plus;</button>
+            </div>
+        </div>
+
+        <div class="calib-card urat">
+            <div class="calib-card-top">
+                <div class="calib-label-wrap">
+                    <div class="calib-mini-icon"><i class="fas fa-vial"></i></div>
+                    <div>
+                        <div class="calib-param-name">Asam Urat</div>
+                        <span class="calib-chip-source">AS7265x UV/Vis</span>
+                    </div>
+                </div>
+                <span class="calib-unit-badge">mg/dL</span>
+            </div>
+            <div class="calib-stepper">
+                <button type="button" class="calib-step-btn" data-target="#cal_urat_bias" data-step="-0.1">&minus;</button>
+                <input type="number" step="0.1" id="cal_urat_bias" class="calib-input" value="{{ calib.asam_urat.bias if calib and calib.asam_urat else 0.0 }}">
+                <button type="button" class="calib-step-btn" data-target="#cal_urat_bias" data-step="0.1">&plus;</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="calib-footer-bar">
+        <div class="calib-actions">
+            <button id="btnSaveCalib" class="btn-calib-save">
+                <i class="fas fa-save"></i> Simpan Kalibrasi
+            </button>
+            <button id="btnResetCalib" class="btn-calib-reset">
+                <i class="fas fa-undo-alt"></i> Reset Semua ke 0
+            </button>
+        </div>
+        <div id="calibStatusPill" class="calib-status-pill"></div>
+    </div>
+</div>
+
+<div class="form-container">
+    <h3>Koneksi WiFi</h3>
+    
+    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;">
+        <button id="btnScanWifi" class="btn-submit" style="min-width: 90px; height: 45px; background-color: #6c757d; border-color: #6c757d;">
+            <i class="fas fa-sync-alt"></i> Scan
+        </button>
+        <div style="flex: 2; min-width: 200px;">
+             <select id="ssidSelect" class="form-control" style="height: 45px;">
+                <option value="">-- Tekan Scan --</option>
+             </select>
+        </div>
+        <input type="password" id="wifiPass" class="form-control" placeholder="Password WiFi (kosongkan jika Open)" style="flex: 2; min-width: 180px; height: 45px;">
+        <button id="btnConnectWifi" class="btn-submit" style="flex: 1; min-width: 120px; height: 45px;">Connect</button>
+    </div>
+    
+    <div id="wifiStatusMsg" style="margin-bottom: 20px; font-weight: 500; padding-left: 10px;"></div>
+
+    <div style="border-top: 1px solid #eee; padding-top: 15px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 0.9rem; font-weight: 600; color: #555;">Current Network:</span>
+                <span id="activeSsidBadge" style="background-color: #d4edda; color: #155724; padding: 5px 12px; border-radius: 20px; font-weight: 700; font-size: 0.9rem; border: 1px solid #c3e6cb;">
+                    <i class="fas fa-wifi"></i> <span id="txtSsid">Checking...</span>
+                </span>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 0.9rem; font-weight: 600; color: #555;">IP Address:</span>
+                <span id="ipAddressBadge" style="background-color: #cce5ff; color: #004085; padding: 5px 12px; border-radius: 20px; font-weight: 700; font-size: 0.9rem; border: 1px solid #b8daff; font-family: monospace;">
+                    <span id="txtIp">...</span>
+                </span>
+                <button onclick="fetchNetworkInfo()" style="background: none; border: none; color: #6c757d; cursor: pointer; margin-left: 5px;" title="Refresh Info">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function fetchNetworkInfo() {
+    $('#txtSsid').text('...');
+    $('#txtIp').text('...');
+    $.get('/api/wifi/ip', function(res) {
+        if (res.status === 'success') {
+            $('#txtIp').text(res.ip);
+            $('#txtSsid').text(res.ssid);
+            let badge = $('#activeSsidBadge');
+            if (res.ssid === 'Disconnected' || res.ssid === '-' || res.ssid === '') {
+                badge.css({'background-color': '#f8d7da', 'color': '#721c24', 'border-color': '#f5c6cb'});
+                $('#txtSsid').text('Not Connected');
+            } else {
+                badge.css({'background-color': '#d4edda', 'color': '#155724', 'border-color': '#c3e6cb'});
+            }
+        } else {
+            $('#txtIp').text('Error');
+            $('#txtSsid').text('-');
+        }
+    });
+}
+
+function checkI2CSensors() {
+    $.get('/api/hardware/i2c_status', function(res) {
+        function updateSensorCard(cardSel, textSel, ok) {
+            $(cardSel).removeClass('connected disconnected').addClass(ok ? 'connected' : 'disconnected');
+            $(textSel).html(ok ? '<i class="fas fa-check-circle"></i> Terhubung & Siap' : '<i class="fas fa-times-circle"></i> Tidak Terdeteksi');
+        }
+        updateSensorCard('#cardMlx', '#statusMlx', res.mlx90614);
+        updateSensorCard('#cardMax', '#statusMax', res.max30102);
+        updateSensorCard('#cardAs7', '#statusAs7', res.as7265x);
+    });
+}
+
+$(document).ready(function() {
+    checkI2CSensors();
+    $('#btnCheckI2C').click(function() {
+        const btn = $(this);
+        const ori = btn.html();
+        btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Memeriksa...');
+        $.get('/api/hardware/i2c_status', function() {
+            checkI2CSensors();
+        }).always(() => btn.prop('disabled', false).html(ori));
+    });
+
+    // Tombol Stepper +/- untuk layar sentuh
+    $('.calib-step-btn').click(function() {
+        const input = $($(this).data('target'));
+        const step = parseFloat($(this).data('step'));
+        const cur = parseFloat(input.val() || 0);
+        const decimals = (Math.abs(step) < 1) ? 1 : 0;
+        input.val((cur + step).toFixed(decimals));
+    });
+
+    function showCalibStatus(ok, msg) {
+        const pill = $('#calibStatusPill');
+        pill.removeClass('ok err').addClass(ok ? 'ok' : 'err')
+            .html(`<i class="fas ${ok ? 'fa-check-circle' : 'fa-exclamation-circle'}"></i> ${msg}`)
+            .stop(true, true).fadeIn(150);
+        setTimeout(() => pill.fadeOut(400), 4000);
+    }
+
+    $('#btnSaveCalib').click(function() {
+        const btn = $(this);
+        const ori = btn.html();
+        btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Menyimpan...');
+
+        const payload = {
+            suhu_bias: parseFloat($('#cal_suhu_bias').val() || 0),
+            spo2_bias: parseFloat($('#cal_spo2_bias').val() || 0),
+            bpm_bias: parseFloat($('#cal_bpm_bias').val() || 0),
+            sys_bias: parseFloat($('#cal_sys_bias').val() || 0),
+            dia_bias: parseFloat($('#cal_dia_bias').val() || 0),
+            gula_bias: parseFloat($('#cal_gula_bias').val() || 0),
+            kol_bias: parseFloat($('#cal_kol_bias').val() || 0),
+            urat_bias: parseFloat($('#cal_urat_bias').val() || 0)
+        };
+        $.ajax({
+            url: '/api/settings/calibration',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(payload),
+            success: (res) => showCalibStatus(true, res.message),
+            error: () => showCalibStatus(false, "Gagal menyimpan kalibrasi."),
+            complete: () => btn.prop('disabled', false).html(ori)
+        });
+    });
+
+    $('#btnResetCalib').click(function() {
+        if (!confirm("Reset semua offset kalibrasi kembali ke 0?")) return;
+        $('#cal_suhu_bias, #cal_spo2_bias, #cal_urat_bias').val("0.0");
+        $('#cal_bpm_bias, #cal_sys_bias, #cal_dia_bias, #cal_gula_bias, #cal_kol_bias').val("0");
+        $('#btnSaveCalib').trigger('click');
+    });
+
+    $('#btnSaveApi').click(function() {
+        let url = $('#apiUrlInput').val();
+        if (!url) return alert("URL tidak boleh kosong.");
+        saveUrlToBackend(url, $(this));
+    });
+
+    $('#apiHistorySelect').change(function() {
+        let selectedUrl = $(this).val();
+        if (selectedUrl) $('#apiUrlInput').val(selectedUrl);
+    });
+
+    $('#btnUseHistory').click(function() {
+        let url = $('#apiHistorySelect').val();
+        if (!url) return alert("Pilih URL dari riwayat terlebih dahulu.");
+        $('#apiUrlInput').val(url);
+        saveUrlToBackend(url, $(this));
+    });
+
+    function saveUrlToBackend(url, btnElement) {
+        let originalText = btnElement.html();
+        btnElement.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Saving...');
+        $.post('/api/settings/save_url', { api_url: url }, function(res) {
+            alert(res.message);
+            location.reload();
+        }).fail(function() {
+            alert("Gagal menyimpan URL.");
+        }).always(function() {
+            btnElement.prop('disabled', false).html(originalText);
+        });
+    }
+
+    $('#btnReconnectPrinter').click(function() {
+        const btn = $(this);
+        const oriText = btn.html();
+        btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Menghubungkan...');
+        $.post('/api/debug/restart_printer', function(res) {
+            alert((res.status === 'success' ? "Sukses: " : "Gagal: ") + res.message);
+        }).fail(() => alert("Terjadi kesalahan sistem saat restart printer."))
+          .always(() => btn.prop('disabled', false).html(oriText));
+    });
+
+    $('#btnTestPrint').click(function() {
+        const btn = $(this);
+        const originalText = btn.html();
+        btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Mencetak...');
+        $.post('/api/debug/test_print', function(res) {
+            alert((res.status === 'success' ? "Sukses: " : "Gagal: ") + res.message);
+        }).fail(function(xhr) {
+            let msg = xhr.responseJSON ? xhr.responseJSON.message : "Terjadi kesalahan sistem.";
+            alert("Error: " + msg);
+        }).always(() => btn.prop('disabled', false).html(originalText));
+    });
+
+    function checkBt() {
+        $.get('/api/hardware/bt_status', function(res) {
+            let badge = $('#btStatusBadge');
+            if (res.status === 'active') {
+                badge.css({'color': '#155724', 'background-color': '#d4edda', 'border-color': '#c3e6cb'}).text('Status: Connected');
+            } else {
+                badge.css({'color': '#721c24', 'background-color': '#f8d7da', 'border-color': '#f5c6cb'}).text('Status: Standby / Disconnected');
+            }
+        });
+    }
+    checkBt();
+
+    $('#btnResetBt').click(function() {
+        if (!confirm("Restart service bluetooth?")) return;
+        let btn = $(this);
+        btn.prop('disabled', true).text('Resetting...');
+        $.post('/api/hardware/reset_bt', function(res) {
+            alert(res.message);
+            setTimeout(checkBt, 3000);
+        }).always(() => btn.prop('disabled', false).text('Reset Bluetooth'));
+    });
+
+    fetchNetworkInfo();
+
+    function scanWifi() {
+        let btn = $('#btnScanWifi');
+        let select = $('#ssidSelect');
+        let originalText = btn.html();
+
+        btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i>');
+        select.html('<option value="">Scanning...</option>');
+
+        $.get('/api/wifi/scan', function(res) {
+            let opts = '<option value="">-- Pilih SSID --</option>';
+            if (res.networks && res.networks.length > 0) {
+                res.networks.forEach(n => {
+                    const label = n.in_use ? `★ ${n.ssid} (${n.signal}% - Terhubung)` : `${n.ssid} (${n.signal}% - ${n.security || 'Open'})`;
+                    opts += `<option value="${$('<div>').text(n.ssid).html()}">${$('<div>').text(label).html()}</option>`;
+                });
+            } else if (res.ssids && res.ssids.length > 0) {
+                res.ssids.forEach(s => opts += `<option value="${s}">${s}</option>`);
+            } else {
+                opts += '<option disabled>Tidak ada WiFi ditemukan</option>';
+            }
+            select.html(opts);
+        })
+        .fail(function() { select.html('<option value="">Gagal memindai</option>'); })
+        .always(function() { btn.prop('disabled', false).html(originalText); });
+    }
+
+    $('#btnScanWifi').click(function(e) { e.preventDefault(); scanWifi(); });
+    scanWifi();
+
+    $('#btnConnectWifi').click(function() {
+        let ssid = $('#ssidSelect').val();
+        let pwd = $('#wifiPass').val();
+        if (!ssid) return alert("Pilih SSID terlebih dahulu.");
+
+        let btn = $(this);
+        btn.prop('disabled', true).text('Connecting...');
+        $('#wifiStatusMsg').html('<span style="color: #856404;"><i class="fas fa-spinner fa-spin"></i> Sedang menghubungkan ke <strong>' + $('<div>').text(ssid).html() + '</strong>...</span>');
+
+        $.post('/api/wifi/connect', { ssid: ssid, password: pwd }, function(res) {
+            if (res.status === 'success') {
+                $('#wifiStatusMsg').html('<span style="color: #155724;">✅ ' + res.message + '</span>');
+                setTimeout(fetchNetworkInfo, 3000);
+            } else {
+                $('#wifiStatusMsg').html('<span style="color: #721c24;">❌ Gagal Terhubung: ' + res.message + '</span>');
+            }
+        }).fail((xhr) => {
+            const msg = (xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : 'Error sistem atau perpindahan IP jaringan.';
+            $('#wifiStatusMsg').html('<span style="color: #721c24;">❌ ' + msg + '</span>');
+        }).always(() => btn.prop('disabled', false).text('Connect'));
+    });
+});
+</script>
+{% endblock %}

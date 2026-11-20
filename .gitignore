@@ -1,0 +1,16 @@
+# Environment & secrets
+.env
+
+# Python bytecode & virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime database & logs
+postgres-data/
+*.log
+
+# OS artifacts
+.DS_Store
+._*

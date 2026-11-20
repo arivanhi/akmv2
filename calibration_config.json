@@ -1,0 +1,27 @@
+{
+    "suhu": {
+        "bias": 0.0
+    },
+    "spo2": {
+        "bias": 0.0
+    },
+    "bpm": {
+        "bias": 0.0
+    },
+    "tekanan_darah": {
+        "sys_bias": 0.0,
+        "dia_bias": 0.0
+    },
+    "gula_darah": {
+        "gain": 1.0,
+        "bias": 0.0
+    },
+    "kolesterol": {
+        "gain": 1.0,
+        "bias": 0.0
+    },
+    "asam_urat": {
+        "gain": 1.0,
+        "bias": 0.0
+    }
+}
