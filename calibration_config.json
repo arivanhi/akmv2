@@ -28,5 +28,10 @@
         "mac": "00:5F:BF:E2:25:DC",
         "name": "BLEsmart_0000057A005FBFE225DC",
         "model": "HEM-7156T"
+    },
+    "printer": {
+        "mac": "DC:0D:51:61:2D:52",
+        "name": "RPP02N",
+        "model": "POS Printer 58 MP58"
     }
 }

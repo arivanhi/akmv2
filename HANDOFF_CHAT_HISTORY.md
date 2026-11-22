@@ -695,3 +695,21 @@ ok saya mau memperbaiki sedikit logiknya, saat melakukan mulai proses pengukuran
    - Ditambahkan tombol **`Ganti Pasien Lain`** pada panel kontrol pasien maupun di dalam modal **Pilih Jenis Pengukuran** (dengan konfirmasi apabila sudah ada data yang terukur) untuk mereset sesi ke pemilihan pasien lain sekaligus membuka kembali kunci menu *sidebar*.
 
 ---
+
+### Turn 24 (2026-11-22 03:42:03 UTC)
+**USER:**
+
+oke selanjutnya saya mau menghubungkan dengan pos printer 58 model mp58. untuk mengaktifkan fitur printnya, koneksinya dihubungkan dengan bluetooth. kalau dicek dengan aplikasi nrf seperti itu datanya
+*(Disertai tangkapan layar nRF Connect: `RPP02N`, MAC `DC:0D:51:61:2D:52`, Service UUIDs `0x18F0` & `e7810a71-73ae-499d-8c15-faa9aef0c3f2`, Flags `LE and BR/EDR Capable`)*
+untuk pin bluetoothnya rpp02n coba 0000 atau 1234
+
+**ANTIGRAVITY:**
+
+1. **Solusi Koneksi Bluetooth BLE POS Printer 58 MP58 (`RPP02N`, MAC `DC:0D:51:61:2D:52`)**:
+   - Mengatasi bug BlueZ `br-connection-profile-unavailable` (akibat flag iklan `0x0A` *LE and BR/EDR Capable* pada chip RPP02N) dengan menyetel `/etc/bluetooth/main.conf` (`ControllerMode = le`) dan `ensure_bluez_le_mode()` (`btmgmt le on` + `btmgmt bredr off`) di Raspberry Pi.
+   - Uji cetak langsung (*live test print*) dari Raspberry Pi (`192.168.100.19`) ke `RPP02N` (`DC:0D:51:61:2D:52`) melalui karakteristik GATT `00002af1-0000-1000-8000-00805f9b34fb` (Service `0x18F0`, didukung pula `bef8d6c9-9c21-4c9e-b632-bd58c1009f9f` & `49535343-8841-43f4-a8d4-ecbe34729bb3`) **berhasil mencetak struk tanpa memerlukan PIN klasik**.
+2. **Integrasi Penuh di `app.py` & Halaman `Pengaturan` (`templates/settings.html`)**:
+   - Endpoint `/api/print_receipt`, `/api/debug/test_print`, dan `/api/debug/restart_printer` kini mencetak langsung via **Bluetooth BLE `RPP02N` (`DC:0D:51:61:2D:52`)** dengan *fallback* otomatis ke USB (`0x0416:0x5011`).
+   - Kartu **POS Printer 58 MP58 (Bluetooth)** di halaman **Pengaturan** menampilkan status *live* (`BLE Siap (RPP02N)`), input penyimpanan MAC Address (`DC:0D:51:61:2D:52`), tombol **`Scan & Hubungkan`**, serta **`Test Print`**.
+
+---

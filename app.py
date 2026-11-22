@@ -379,9 +379,43 @@ def auto_link_ppg_omron_pair(patient_id, ppg_log_id=None, omron_log_id=None, mea
         return None
 
 
-# ── Printer Thermal ESC/POS ──────────────────────────────────
+# ── Printer Thermal ESC/POS (Bluetooth BLE RPP02N MP58 & USB) ──
+BLE_PRINTER_SERVICE_UUIDS = [
+    "000018f0-0000-1000-8000-00805f9b34fb",
+    "e7810a71-73ae-499d-8c15-faa9aef0c3f2",
+    "49535343-fe7d-4ae5-8fa9-9fafd205e455"
+]
+BLE_PRINTER_WRITE_UUIDS = [
+    "00002af1-0000-1000-8000-00805f9b34fb",
+    "bef8d6c9-9c21-4c9e-b632-bd58c1009f9f",
+    "49535343-8841-43f4-a8d4-ecbe34729bb3"
+]
+
+
+def ensure_bluez_le_mode():
+    """
+    Memastikan adapter hci0 berada dalam mode LE-only (bredr off) agar perangkat dual-flag
+    seperti POS Printer MP58 (RPP02N) dan Tensimeter Omron tidak ditolak oleh BlueZ dengan
+    error 'br-connection-profile-unavailable' atau 'Page Timeout'.
+    """
+    try:
+        info = subprocess.run(["btmgmt", "info"], capture_output=True, text=True, timeout=4)
+        for line in (info.stdout or "").splitlines():
+            s = line.strip().lower()
+            if s.startswith("current settings:") and "br/edr" in s:
+                subprocess.run(["btmgmt", "power", "off"], capture_output=True, timeout=4)
+                subprocess.run(["btmgmt", "le", "on"], capture_output=True, timeout=4)
+                subprocess.run(["btmgmt", "bredr", "off"], capture_output=True, timeout=4)
+                subprocess.run(["btmgmt", "power", "on"], capture_output=True, timeout=4)
+                print("-> [BLUETOOTH] Adapter hci0 disetel ke mode LE (bredr off).")
+                break
+    except Exception as e:
+        print(f"[BT LE MODE WARN] {e}")
+
+
 def init_printer_connection():
     global printer_instance
+    ensure_bluez_le_mode()
     if not HAS_ESCPOS:
         printer_instance = None
         return False
@@ -392,12 +426,193 @@ def init_printer_connection():
             except Exception:
                 pass
         printer_instance = Usb(0x0416, 0x5011, 0, 0x81, 0x03)
-        print("-> [PRINTER] Berhasil Terhubung!")
+        print("-> [PRINTER USB] Berhasil Terhubung!")
         return True
     except Exception as e:
-        print(f"-> [PRINTER] Belum terdeteksi: {e}")
+        print(f"-> [PRINTER USB] Tidak dicolok ke USB (menggunakan mode Bluetooth BLE RPP02N): {e}")
         printer_instance = None
         return False
+
+
+def get_printer_config():
+    cfg = load_calibration()
+    p_cfg = cfg.get("printer") if isinstance(cfg.get("printer"), dict) else {}
+    return {
+        "mac": (p_cfg.get("mac") or os.getenv("BLE_PRINTER_MAC", "DC:0D:51:61:2D:52")).strip().upper(),
+        "name": p_cfg.get("name") or "RPP02N",
+        "model": p_cfg.get("model") or "POS Printer 58 MP58"
+    }
+
+
+def save_printer_config(mac, name=None):
+    try:
+        cfg = load_calibration()
+        p_cfg = cfg.get("printer") if isinstance(cfg.get("printer"), dict) else {}
+        p_cfg["mac"] = str(mac).strip().upper()
+        if name:
+            p_cfg["name"] = str(name).strip()
+        p_cfg["model"] = p_cfg.get("model") or "POS Printer 58 MP58"
+        cfg["printer"] = p_cfg
+        with open(CALIBRATION_FILE, "w") as f:
+            json.dump(cfg, f, indent=4)
+    except Exception as e:
+        print(f"[PRINTER CFG WARN] {e}")
+
+
+def is_ble_printer_device(device, adv_data, target_mac=None) -> bool:
+    addr = (device.address or "").upper()
+    name = (device.name or (adv_data.local_name if adv_data else "") or "").upper()
+    if target_mac and addr == target_mac.upper():
+        return True
+    if any(k in name for k in ("RPP02", "MP58", "RPP", "POS58", "MTP-", "PRINTER")):
+        return True
+    if adv_data:
+        uuids = [u.lower() for u in (adv_data.service_uuids or [])]
+        if any(su in uuids for su in BLE_PRINTER_SERVICE_UUIDS):
+            return True
+    return False
+
+
+def send_escpos_via_ble(payload_bytes: bytes = None, requested_mac: str = None) -> tuple:
+    """
+    Memindai, menghubungkan, dan mengirim byte ESC/POS ke POS Printer 58 MP58 (RPP02N) melalui BLE GATT.
+    Jika payload_bytes None, hanya melakukan verifikasi koneksi & trust.
+    Mengembalikan tuple (success: bool, message: str, info_dict: dict).
+    """
+    import asyncio
+    try:
+        from bleak import BleakScanner, BleakClient
+    except ImportError:
+        return False, "Library Bleak BLE tidak tersedia.", {}
+
+    ensure_bluez_le_mode()
+    p_cfg = get_printer_config()
+    target_mac = (requested_mac or p_cfg["mac"]).strip().upper()
+
+    async def _run():
+        found_holder = [None, None]
+        found_ev = asyncio.Event()
+
+        def _cb(dev, adv):
+            if not found_holder[0] and is_ble_printer_device(dev, adv, target_mac=target_mac):
+                found_holder[0] = dev
+                found_holder[1] = adv
+                found_ev.set()
+
+        scanner = BleakScanner(detection_callback=_cb)
+        await scanner.start()
+        try:
+            await asyncio.wait_for(found_ev.wait(), timeout=7.5)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            try:
+                await scanner.stop()
+            except Exception:
+                pass
+
+        if not found_holder[0]:
+            return False, f"Printer Bluetooth {p_cfg['name']} ({target_mac}) tidak terdeteksi. Pastikan printer MP58 menyala.", {}
+
+        dev = found_holder[0]
+        adv = found_holder[1]
+        dev_mac = dev.address.upper()
+        dev_name = dev.name or (adv.local_name if adv else None) or p_cfg["name"]
+
+        async with BleakClient(dev, timeout=15.0) as client:
+            subprocess.run(["bluetoothctl", "trust", dev_mac], capture_output=True, timeout=4)
+
+            write_uuid = None
+            for candidate in BLE_PRINTER_WRITE_UUIDS:
+                ch = client.services.get_characteristic(candidate)
+                if ch is not None:
+                    write_uuid = candidate
+                    break
+
+            if not write_uuid:
+                for srv in client.services:
+                    for ch in srv.characteristics:
+                        if "write-without-response" in ch.properties or "write" in ch.properties:
+                            write_uuid = ch.uuid
+                            break
+                    if write_uuid:
+                        break
+
+            if not write_uuid:
+                return False, f"Karakteristik cetak BLE tidak ditemukan pada {dev_name} ({dev_mac}).", {}
+
+            if payload_bytes:
+                chunk_size = 100
+                for idx in range(0, len(payload_bytes), chunk_size):
+                    chunk = payload_bytes[idx:idx + chunk_size]
+                    await client.write_gatt_char(write_uuid, chunk, response=False)
+                    await asyncio.sleep(0.025)
+                await asyncio.sleep(0.15)
+
+        save_printer_config(dev_mac, dev_name)
+        return True, f"Printer Bluetooth {dev_name} ({dev_mac}) berhasil mencetak!", {
+            "mac": dev_mac,
+            "name": dev_name,
+            "write_uuid": write_uuid
+        }
+
+    try:
+        return asyncio.run(_run())
+    except Exception as e:
+        err_str = str(e)
+        if "br-connection-profile-unavailable" in err_str.lower():
+            # Bersihkan cache BR/EDR BlueZ dan paksa LE mode lalu coba sekali lagi
+            subprocess.run(["bluetoothctl", "remove", target_mac], capture_output=True, timeout=4)
+            subprocess.run(["btmgmt", "power", "off"], capture_output=True, timeout=4)
+            subprocess.run(["btmgmt", "le", "on"], capture_output=True, timeout=4)
+            subprocess.run(["btmgmt", "bredr", "off"], capture_output=True, timeout=4)
+            subprocess.run(["btmgmt", "power", "on"], capture_output=True, timeout=4)
+            time.sleep(0.8)
+            try:
+                return asyncio.run(_run())
+            except Exception as e2:
+                return False, f"Gagal terhubung ke Printer Bluetooth ({target_mac}): {e2}", {}
+        return False, f"Gagal terhubung ke Printer Bluetooth ({target_mac}): {e}", {}
+
+
+def build_receipt_escpos_bytes(data: dict) -> bytes:
+    """Membangun byte stream ESC/POS 58mm (32 karakter/baris) untuk struk pemeriksaan kesehatan MEDISYN."""
+    ESC_INIT         = b"\x1b\x40"
+    ESC_ALIGN_LEFT   = b"\x1b\x61\x00"
+    ESC_ALIGN_CENTER = b"\x1b\x61\x01"
+    ESC_BOLD_ON      = b"\x1b\x45\x01"
+    ESC_BOLD_OFF     = b"\x1b\x45\x00"
+
+    buf = bytearray()
+    buf += ESC_INIT
+    buf += ESC_ALIGN_CENTER
+    buf += ESC_BOLD_ON
+    buf += b"Hasil Pemeriksaan Kesehatan\n"
+    buf += b"MEDISYN - Medical System\n"
+    buf += ESC_BOLD_OFF
+    buf += b"================================\n"
+    buf += ESC_ALIGN_LEFT
+    nama = str(data.get("nama") or "-")
+    tanggal = str(data.get("tanggal") or datetime.now().strftime("%d-%m-%Y %H:%M"))
+    buf += f"Nama    : {nama}\n".encode("ascii", errors="replace")
+    buf += f"Tanggal : {tanggal}\n".encode("ascii", errors="replace")
+    buf += b"--------------------------------\n"
+
+    for res in data.get("hasil", []):
+        tipe = str(res.get("tipe") or "")
+        nilai = str(res.get("nilai") or "")
+        status = str(res.get("status") or "")
+        buf += ESC_BOLD_ON
+        buf += f"{tipe}: {nilai}\n".encode("ascii", errors="replace")
+        buf += ESC_BOLD_OFF
+        if status and status != "-":
+            buf += f"Status : {status}\n".encode("ascii", errors="replace")
+        buf += b"\n"
+
+    buf += ESC_ALIGN_CENTER
+    buf += b"--------------------------------\n"
+    buf += b"Terima Kasih - Semoga Sehat\n\n\n"
+    return bytes(buf)
 
 
 # ── Kalibrasi Helper ─────────────────────────────────────────
@@ -414,6 +629,11 @@ def load_calibration():
             "mac": os.getenv("BLE_OMRON_MAC", "00:5F:BF:E2:25:DC").upper(),
             "name": "BLEsmart_0000057A005FBFE225DC",
             "model": "HEM-7156T"
+        },
+        "printer": {
+            "mac": os.getenv("BLE_PRINTER_MAC", "DC:0D:51:61:2D:52").upper(),
+            "name": "RPP02N",
+            "model": "POS Printer 58 MP58"
         }
     }
     if os.path.exists(CALIBRATION_FILE):
@@ -1771,65 +1991,126 @@ def check_i2c_status():
 def print_receipt():
     if g.user is None:
         return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+    data = request.json or {}
+    payload_bytes = build_receipt_escpos_bytes(data)
+
+    # Prioritas 1: Cetak melalui Bluetooth BLE POS Printer 58 MP58 (RPP02N)
+    ok_ble, msg_ble, info_ble = send_escpos_via_ble(payload_bytes)
+    if ok_ble:
+        return jsonify({"status": "success", "message": f"Struk berhasil dicetak ke {info_ble.get('name', 'RPP02N')} ({info_ble.get('mac', '')})!"})
+
+    # Prioritas 2 (Fallback): Cetak melalui USB jika printer terhubung lewat kabel USB
     global printer_instance
     if printer_instance is None:
         init_printer_connection()
-    if printer_instance is None:
-        return jsonify({"status": "error", "message": "Printer USB tidak terdeteksi."}), 500
+    if printer_instance is not None:
+        try:
+            printer_instance._raw(payload_bytes)
+            return jsonify({"status": "success", "message": "Struk berhasil dicetak melalui USB!"})
+        except Exception as e:
+            printer_instance = None
+            return jsonify({"status": "error", "message": f"Gagal mencetak (BLE & USB): {e}"}), 500
 
-    data = request.json or {}
-    try:
-        printer_instance.set(align="center")
-        printer_instance.text("Hasil Pemeriksaan Kesehatan\n")
-        printer_instance.text("MEDISYN - Medical System\n")
-        printer_instance.text("================================\n")
-        printer_instance.set(align="left")
-        printer_instance.text(f"Nama    : {data.get('nama')}\n")
-        printer_instance.text(f"Tanggal : {data.get('tanggal')}\n")
-        printer_instance.text("--------------------------------\n")
-        for res in data.get("hasil", []):
-            printer_instance.set(bold=True)
-            printer_instance.text(f"{res['tipe']}: {res['nilai']}\n")
-            printer_instance.set(bold=False)
-            status = res.get("status", "")
-            if status and status != "-":
-                printer_instance.text(f"Status : {status}\n")
-            printer_instance.text("\n")
-        printer_instance.set(align="center")
-        printer_instance.text("--------------------------------\n")
-        printer_instance.text("Terima Kasih - Semoga Sehat\n\n\n")
-        return jsonify({"status": "success", "message": "Struk berhasil dicetak!"})
-    except Exception as e:
-        printer_instance = None
-        return jsonify({"status": "error", "message": f"Gagal mencetak: {e}"}), 500
+    return jsonify({"status": "error", "message": msg_ble}), 500
 
 
 @app.route("/api/debug/restart_printer", methods=["POST"])
 def debug_restart_printer():
     if g.user is None:
         return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    payload = request.get_json(silent=True) or {}
+    req_mac = (payload.get("mac") or request.form.get("mac") or "").strip().upper() or None
+    ok_ble, msg_ble, info_ble = send_escpos_via_ble(payload_bytes=None, requested_mac=req_mac)
+    if ok_ble:
+        return jsonify({
+            "status": "success",
+            "message": f"Printer Bluetooth {info_ble.get('name', 'RPP02N')} ({info_ble.get('mac', '')}) terhubung & siap mencetak!",
+            "printer": info_ble
+        })
     if init_printer_connection():
-        return jsonify({"status": "success", "message": "Printer berhasil terhubung ulang!"})
-    return jsonify({"status": "error", "message": "Printer belum terdeteksi di port USB."})
+        return jsonify({"status": "success", "message": "Printer USB berhasil terhubung ulang!"})
+    return jsonify({"status": "error", "message": msg_ble})
 
 
 @app.route("/api/debug/test_print", methods=["POST"])
 def debug_test_print():
     if g.user is None:
         return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+    p_cfg = get_printer_config()
+    now_str = datetime.now().strftime("%d-%m-%Y %H:%M")
+    test_bytes = (
+        b"\x1b\x40\x1b\x61\x01"
+        b"\n================================\n"
+        b"\x1b\x45\x01TES KONEKSI PRINTER MEDISYN\n"
+        b"POS 58 MP58 (RPP02N) BERHASIL\x1b\x45\x00\n"
+        b"================================\n"
+        + f"MAC  : {p_cfg['mac']}\nWaktu: {now_str}\n\n\n".encode("ascii", errors="replace")
+    )
+
+    ok_ble, msg_ble, info_ble = send_escpos_via_ble(test_bytes)
+    if ok_ble:
+        return jsonify({
+            "status": "success",
+            "message": f"Test Print berhasil dikirim ke {info_ble.get('name', 'RPP02N')} ({info_ble.get('mac', '')})!"
+        })
+
     global printer_instance
     if printer_instance is None and not init_printer_connection():
-        return jsonify({"status": "error", "message": "Printer tidak terhubung."}), 500
+        return jsonify({"status": "error", "message": msg_ble}), 500
     try:
-        printer_instance.set(align="center")
-        printer_instance.text("\n================================\n")
-        printer_instance.text("TES KONEKSI PRINTER AKMv2\nBERHASIL\n")
-        printer_instance.text("================================\n")
-        printer_instance.text(f"Waktu: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n\n\n")
-        return jsonify({"status": "success", "message": "Test Print Terkirim!"})
+        printer_instance._raw(test_bytes)
+        return jsonify({"status": "success", "message": "Test Print Terkirim via USB!"})
     except Exception as e:
         printer_instance = None
         return jsonify({"status": "error", "message": f"Gagal mencetak: {e}"}), 500
+
+
+@app.route("/api/hardware/printer_status")
+def api_printer_status():
+    if g.user is None:
+        return jsonify({"status": "error"}), 401
+    p_cfg = get_printer_config()
+    mac = p_cfg["mac"]
+    res = {
+        "status": "success",
+        "mac": mac,
+        "name": p_cfg["name"],
+        "model": p_cfg["model"],
+        "trusted": False,
+        "seen_in_bluez": False,
+        "usb_connected": printer_instance is not None
+    }
+    try:
+        info_proc = subprocess.run(["bluetoothctl", "info", mac], capture_output=True, text=True, timeout=4)
+        out = info_proc.stdout or ""
+        if "not available" not in out.lower() and out.strip():
+            res["seen_in_bluez"] = True
+            for line in out.splitlines():
+                s = line.strip()
+                if s.startswith("Name:"):
+                    val = s.split(":", 1)[1].strip()
+                    if val:
+                        res["name"] = val
+                elif s.startswith("Trusted:"):
+                    res["trusted"] = (s.split(":", 1)[1].strip().lower() == "yes")
+    except Exception:
+        pass
+    return jsonify(res)
+
+
+@app.route("/api/hardware/printer_save_mac", methods=["POST"])
+def api_printer_save_mac():
+    if g.user is None:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    payload = request.get_json(silent=True) or {}
+    new_mac = (payload.get("mac") or request.form.get("mac") or "").strip().upper()
+    if not new_mac or len(new_mac) != 17 or new_mac.count(":") != 5:
+        return jsonify({"status": "error", "message": "Format MAC Address printer tidak valid (contoh: DC:0D:51:61:2D:52)."}), 400
+    save_printer_config(new_mac)
+    subprocess.run(["bluetoothctl", "trust", new_mac], capture_output=True, timeout=4)
+    return jsonify({"status": "success", "message": f"MAC Address Printer ({new_mac}) berhasil disimpan."})
 
 
 @app.route("/api/hardware/bt_status")
@@ -1967,10 +2248,14 @@ def reset_bt():
     try:
         subprocess.run(["rfkill", "unblock", "bluetooth"], capture_output=True, timeout=5)
         subprocess.run(["hciconfig", "hci0", "reset"], capture_output=True, timeout=5)
+        ensure_bluez_le_mode()
         st = get_omron_bluez_status()
         if st.get("mac"):
             subprocess.run(["bluetoothctl", "trust", st["mac"]], capture_output=True, timeout=4)
-        return jsonify({"status": "success", "message": "Adapter Bluetooth berhasil direset."})
+        p_cfg = get_printer_config()
+        if p_cfg.get("mac"):
+            subprocess.run(["bluetoothctl", "trust", p_cfg["mac"]], capture_output=True, timeout=4)
+        return jsonify({"status": "success", "message": "Adapter Bluetooth berhasil direset (Mode LE aktif)."})
     except Exception as e:
         return jsonify({"status": "error", "message": f"Gagal reset Bluetooth: {e}"})
 

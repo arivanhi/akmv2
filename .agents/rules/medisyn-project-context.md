@@ -48,8 +48,9 @@ Dokumen aturan konteks otomatis untuk Google Antigravity saat membuka workspace 
 - Input *Ground-Truth* tersedia langsung di kartu hasil pengukuran (`templates/measure.html`) maupun di tabel halaman **Evaluasi AI** (`templates/evaluation.html`).
 - Ekspor dataset siap latih tersedia di `/api/ml_dataset/export_csv` dan `/api/ml_dataset/export_json`. Pelatihan model otomatis (`RandomForest + Ridge` -> `model/as7265x_<target>.joblib`) tersedia melalui `/api/ml_dataset/train_model` minimal 8 sampel *Ground-Truth*.
 
-## 5. UX Khusus & Aset Logo
-- **Touch Virtual Keyboard**: `static/virtual-keyboard.js` menangani input layar sentuh `QDTECH MPI7002` secara native di web.
+- **UI Khusus, Printer BLE MP58, & Aset Logo**:
+  - **POS Printer 58 MP58 (Bluetooth BLE & USB)**: Terhubung secara nirkabel via Bluetooth Low Energy ke **`RPP02N`** (MAC Default: `DC:0D:51:61:2D:52`, Service `0x18F0` -> Write Char `0x2AF1` / `e7810a71...` -> `bef8d6c9...` / `49535343...`), dengan `ControllerMode = le` (`btmgmt bredr off`) agar tidak terkena `br-connection-profile-unavailable`, serta fallback otomatis ke USB (`0x0416:0x5011`).
+  - **Touch Virtual Keyboard**: `static/virtual-keyboard.js` menangani input layar sentuh `QDTECH MPI7002` secara native di web.
 - **Alur Konfirmasi Pengukuran**: Kartu hasil menampilkan tombol `[Ulang]` dan `[Selesai]` -> memunculkan modal konfirmasi *"Apakah hasil pengukuran berikut sudah sesuai semua?"* -> mengunci parameter yang sudah sesuai dan mengubah tombol pilihannya menjadi **abu-abu (`grey`)**.
 - **Penguncian Menu Navigasi Selama Sesi Pengukuran**: Saat sesi pengukuran pasien sedang berjalan di `templates/measure.html`, seluruh menu navigasi di *sidebar* otomatis dikunci (`.sidebar.session-locked` dengan ikon gembok & *toast* peringatan) agar operator tidak salah menekan menu lain di tengah sesi. Menu kembali terbuka otomatis setelah menekan **`Simpan & Selesai Sesi`** atau **`Ganti Pasien Lain`**.
 - **Sidebar & Logo**: Saat sidebar di-*minimize*, hanya menampilkan ikon huruf **`M` MEDISYN** (`static/img/logo_medisyn_icon.png`). File master PNG resolusi tinggi `300 DPI` tersimpan di folder `logo/` (`logo_m.png`, `logo_medisyn_penuh.png`, `logo_udinus.png`).

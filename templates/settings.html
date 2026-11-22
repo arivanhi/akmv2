@@ -100,16 +100,24 @@
                 <div class="settings-header">
                     <div class="settings-icon-wrapper"><i class="fas fa-print"></i></div>
                     <div class="settings-title">
-                        <h4>Printer Thermal</h4>
-                        <p>Status & Koneksi Printer Struk</p>
+                        <h4>POS Printer 58 MP58 (Bluetooth)</h4>
+                        <p id="printerDeviceNameLabel">{{ calib.printer.name if calib and calib.printer else 'RPP02N' }} • BLE Service 0x18F0 / USB</p>
                     </div>
                 </div>
-                <p style="font-size: 0.9rem; color: #666; line-height: 1.5;">
-                    Gunakan menu ini jika printer tidak merespons atau baru dihubungkan ke port USB.
+                <p style="font-size: 0.86rem; color: #555; line-height: 1.45; margin-bottom: 10px;">
+                    Terhubung via Bluetooth Low Energy (<code>0x18F0</code> / <code>0x2AF1</code>) ke <strong>RPP02N (MP58)</strong> tanpa kabel (dengan fallback otomatis ke USB).
                 </p>
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+                    <input type="text" id="printerMacInput" class="form-control" value="{{ calib.printer.mac if calib and calib.printer else 'DC:0D:51:61:2D:52' }}" placeholder="DC:0D:51:61:2D:52" style="height: 36px; font-family: monospace; font-size: 0.88rem; padding: 6px 10px;">
+                    <button type="button" id="btnSavePrinterMac" class="btn-setting outline" style="flex: 0 0 auto; padding: 6px 12px; font-size: 0.82rem;">
+                        <i class="fas fa-save"></i> Simpan MAC
+                    </button>
+                </div>
+                <div id="printerFeedback" style="display: none; font-size: 0.82rem; padding: 8px 10px; border-radius: 6px; margin-bottom: 8px;"></div>
             </div>
-            <div class="settings-actions">
-                <button id="btnReconnectPrinter" class="btn-setting warning"><i class="fas fa-plug"></i> Hubungkan Ulang</button>
+            <div class="settings-actions" style="flex-wrap: wrap;">
+                <div id="printerStatusBadge" class="btn-setting outline" style="cursor: default; font-weight: 600;">Status: Checking...</div>
+                <button id="btnReconnectPrinter" class="btn-setting warning"><i class="fas fa-plug"></i> Scan &amp; Hubungkan</button>
                 <button id="btnTestPrint" class="btn-setting primary"><i class="fas fa-file-invoice"></i> Test Print</button>
             </div>
         </div>
@@ -543,25 +551,94 @@ $(document).ready(function() {
         });
     }
 
+    function checkPrinterStatus() {
+        $.get('/api/hardware/printer_status', function(res) {
+            let badge = $('#printerStatusBadge');
+            if (res && res.status === 'success') {
+                if (res.name) $('#printerDeviceNameLabel').text(res.name + ' (' + (res.model || 'MP58') + ') • BLE 0x18F0');
+                if (res.mac) $('#printerMacInput').val(res.mac);
+                if (res.trusted || res.seen_in_bluez) {
+                    badge.css({'color': '#155724', 'background-color': '#d4edda', 'border-color': '#c3e6cb'})
+                         .html('<i class="fas fa-check-circle"></i> BLE Siap (' + res.name + ')');
+                } else if (res.usb_connected) {
+                    badge.css({'color': '#155724', 'background-color': '#d4edda', 'border-color': '#c3e6cb'})
+                         .html('<i class="fas fa-usb"></i> USB Terhubung');
+                } else {
+                    badge.css({'color': '#856404', 'background-color': '#fff3cd', 'border-color': '#ffeeba'})
+                         .html('<i class="fas fa-print"></i> Standby BLE');
+                }
+            }
+        });
+    }
+    checkPrinterStatus();
+
+    $('#btnSavePrinterMac').click(function() {
+        const mac = ($('#printerMacInput').val() || '').trim().toUpperCase();
+        const btn = $(this);
+        const ori = btn.html();
+        btn.prop('disabled', true).text('Menyimpan...');
+        $.ajax({
+            url: '/api/hardware/printer_save_mac',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ mac: mac }),
+            success: function(res) {
+                $('#printerFeedback').show().css({'background': '#dcfce7', 'color': '#166534'}).text(res.message);
+                checkPrinterStatus();
+            },
+            error: function(xhr) {
+                const msg = (xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : 'Format MAC tidak valid.';
+                $('#printerFeedback').show().css({'background': '#fee2e2', 'color': '#991b1b'}).text(msg);
+            },
+            complete: function() {
+                btn.prop('disabled', false).html(ori);
+            }
+        });
+    });
+
     $('#btnReconnectPrinter').click(function() {
         const btn = $(this);
         const oriText = btn.html();
-        btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Menghubungkan...');
-        $.post('/api/debug/restart_printer', function(res) {
-            alert((res.status === 'success' ? "Sukses: " : "Gagal: ") + res.message);
-        }).fail(() => alert("Terjadi kesalahan sistem saat restart printer."))
-          .always(() => btn.prop('disabled', false).html(oriText));
+        const mac = ($('#printerMacInput').val() || '').trim().toUpperCase();
+        btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Memindai BLE...');
+        $('#printerFeedback').show().css({'background': '#eff6ff', 'color': '#1e40af'})
+            .html('<i class="fas fa-spinner fa-spin"></i> Menghubungkan ke POS Printer MP58 (RPP02N)...');
+        $.ajax({
+            url: '/api/debug/restart_printer',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ mac: mac }),
+            success: function(res) {
+                const ok = (res.status === 'success');
+                $('#printerFeedback').show()
+                    .css(ok ? {'background': '#dcfce7', 'color': '#166534'} : {'background': '#fee2e2', 'color': '#991b1b'})
+                    .html((ok ? '✅ ' : '⚠️ ') + res.message);
+                checkPrinterStatus();
+            },
+            error: function() {
+                $('#printerFeedback').show().css({'background': '#fee2e2', 'color': '#991b1b'}).text('Gagal memindai printer.');
+            },
+            complete: function() {
+                btn.prop('disabled', false).html(oriText);
+            }
+        });
     });
 
     $('#btnTestPrint').click(function() {
         const btn = $(this);
         const originalText = btn.html();
         btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Mencetak...');
+        $('#printerFeedback').show().css({'background': '#eff6ff', 'color': '#1e40af'})
+            .html('<i class="fas fa-spinner fa-spin"></i> Mengirim Test Print via Bluetooth BLE...');
         $.post('/api/debug/test_print', function(res) {
-            alert((res.status === 'success' ? "Sukses: " : "Gagal: ") + res.message);
+            const ok = (res.status === 'success');
+            $('#printerFeedback').show()
+                .css(ok ? {'background': '#dcfce7', 'color': '#166534'} : {'background': '#fee2e2', 'color': '#991b1b'})
+                .html((ok ? '✅ ' : '⚠️ ') + res.message);
+            checkPrinterStatus();
         }).fail(function(xhr) {
             let msg = xhr.responseJSON ? xhr.responseJSON.message : "Terjadi kesalahan sistem.";
-            alert("Error: " + msg);
+            $('#printerFeedback').show().css({'background': '#fee2e2', 'color': '#991b1b'}).text('❌ ' + msg);
         }).always(() => btn.prop('disabled', false).html(originalText));
     });
 
