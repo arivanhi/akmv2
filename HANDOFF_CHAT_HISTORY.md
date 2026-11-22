@@ -32,15 +32,18 @@ Jika menggunakan paket ZIP `antigravity_export_medisyn_f102eaa7.zip`, ekstrak fo
 ---
 
 ## Ringkasan Status Teknis Terakhir
-1. **Stack Docker di Raspberry Pi (`admin@192.168.100.166`, `/home/admin/akmv2`)**:
-   - `akmv2_web` (`http://192.168.100.166:5000` — akun default `admin`/`admin123`, `operator`/`operator123`)
+1. **Stack Docker di Raspberry Pi (`admin@192.168.100.19`, `/home/admin/akmv2`)**:
+   - `akmv2_web` (`http://192.168.100.19:5000` — akun default `admin`/`admin123`, `operator`/`operator123`)
    - `akmv2_postgres` (`5433:5432`, DB `health_monitoring_db`, user `admin`, pass `akmv2_udinus_password`)
    - `akmv2_mqtt` (`1883:1883`)
-   - `akmv2_adminer` (`http://192.168.100.166:8080`, Server: `db`, User: `admin`, Pass: `akmv2_udinus_password`, DB: `health_monitoring_db`)
-2. **Sensor I2C (`/dev/i2c-1`)**:
+   - `akmv2_adminer` (`http://192.168.100.19:8080`, Server: `db`, User: `admin`, Pass: `akmv2_udinus_password`, DB: `health_monitoring_db`)
+2. **Sensor I2C (`/dev/i2c-1`) & Tensimeter BLE Omron HEM-7156T**:
    - `0x5A` (`MLX90614` Suhu `5s`), `0x57` (`MAX30102` SpO2/BPM/Tensi `6s`), `0x49` (`AS7265x` 18-Kanal `7s` @ `~3.4 Hz`, filter IQR + L2 norm, kanal literatur untuk Gula Darah, Kolesterol, dan Asam Urat).
+   - **Tekanan Darah (2 Metode Pembacaan)**:
+     1. **Tensimeter BLE Omron HEM-7156T** (`BLEsmart_0000057A005FBFE225DC`, MAC `00:5F:BF:E2:25:DC`, Service `0x1810` / Characteristic `0x2A35` IEEE-11073 16-bit SFLOAT, sudah *Paired, Bonded, & Trusted* di BlueZ Raspi, lengkap dengan fitur **Scan & Pair Omron (`-P-`)** di menu `Pengaturan` & modal `Mengukur`).
+     2. **Sensor Oximeter MAX30102 (`0x57`)** (Estimasi *Pulse Wave Analysis* 6 detik).
 3. **Dataset Ground-Truth & Machine Learning**:
-   - Tabel `raw_sensor_data` menyimpan `raw_values` (18 kanal), `raw_frames` (`N×18` sampel waktu), `context_features`, dan `ground_truth_value`.
+   - Tabel `raw_sensor_data` menyimpan `raw_values` (18 kanal), `raw_frames` (`N×18` sampel waktu), `context_features`, `ground_truth_value`, serta log `tensi_omron_ble`.
    - Fitur input *Ground-Truth* aktif di halaman `Mengukur` & `Evaluasi AI`, lengkap dengan ekspor CSV/JSON dan tombol pelatihan model ML.
 4. **Branding MEDISYN & Logo**:
    - Seluruh UI menggunakan identitas **MEDISYN** (*Medical System Integration*), tanpa logo Dinkes, mode *minimize* sidebar memakai ikon `M`, tombol pengukuran yang sudah selesai berwarna *grey*, dan file master PNG `300 DPI` tersimpan di `logo/` (`logo_m.png`, `logo_medisyn_penuh.png`, `logo_udinus.png`).
@@ -610,5 +613,37 @@ Ketiga file logo berformat **PNG transparan resolusi tinggi (300 DPI)** sudah se
 export chat ini untuk saya jalankan di antigravity pc lain
 
 *(Permintaan aktif: mengekspor riwayat percakapan ini untuk PC lain)*
+
+---
+
+### Turn 19 (2026-11-22 02:24:10 UTC)
+**USER:**
+
+@[akmv2/HANDOFF_CHAT_HISTORY.md] saya ingin melanjutkan project ini. tolong baca dulu isian folder akmv2 dengan file .md ini
+
+**ANTIGRAVITY:**
+
+Membaca seluruh dokumen handoff (`HANDOFF_CHAT_HISTORY.md`, `.agents/rules/medisyn-project-context.md`, `README.md`) dan memeriksa struktur berkas `akmv2`.
+
+---
+
+### Turn 20 (2026-11-22 02:26:47 UTC)
+**USER:**
+
+ok sekarang raspinya ada di alamat 192.168.100.19, username admin, pass admin. saya ingin menyambungkan atau pairing ke tensimeter omron hem-7156t. jadi untuk tekanan darah nanti ada dua cara pembacaan dengan tensimeter ini atau dengan sensornya. oh ya nanti disetiap akhir selesai perubahan lakukan commit dan push ya, dan juga update handoff .mdnya
+*(Disertai tangkapan layar nRF Connect: `BLEsmart_0000057A005FBFE225DC`, MAC `00:5F:BF:E2:25:DC`, Service UUID `0x1810`, Manufacturer Data Omron `0x020E: 0x010C000000`)*
+
+**ANTIGRAVITY:**
+
+1. **Pairing & Bonding Langsung di Raspberry Pi (`192.168.100.19`)**:
+   - Mengatasi konflik pemindaian paralel `hci0` (`ble_scale_service.py`) menggunakan *single-radio adapter lock* dan menghentikan `BleakScanner` tepat sebelum `BleakClient.connect()` (LE connection sebelum `pair()`).
+   - Tensimeter **Omron HEM-7156T** (`BLEsmart_0000057A005FBFE225DC`, MAC `00:5F:BF:E2:25:DC`) berhasil di-*pair*, *bond*, dan *trust* pada BlueZ Raspberry Pi (`Paired: yes`, `Bonded: yes`, `Trusted: yes`), serta karakteristik `0x2A35` (*Blood Pressure Measurement*) berhasil diaktifkan.
+2. **Dua Metode Pembacaan Tekanan Darah di Halaman `Mengukur` (`templates/measure.html`)**:
+   - Menambahkan modal **Pilih Metode Pengukuran Tekanan Darah** saat memilih tombol `Tekanan Darah` maupun saat menekan `Ulang` pada kartu Tekanan Darah:
+     - **Metode 1 — Tensimeter Omron HEM-7156T (Bluetooth BLE)**: Menunggu hingga 90 detik untuk pemompaan manset atau tombol transfer Bluetooth, membaca SFLOAT 16-bit IEEE-11073 (`SYS`, `DIA`, `MAP`, `Pulse`) dari `0x2A35`, menyinkronkan waktu `0x2A2B`, dan mencatat ke `raw_sensor_data` (`tensi_omron_ble`). Dilengkapi tombol **Pairing (`-P-`)** langsung di dalam modal.
+     - **Metode 2 — Sensor Oximeter MAX30102 (Optik Jari I2C `0x57`)**: Estimasi *Pulse Wave Analysis* selama 6 detik.
+   - Kartu hasil `Tekanan Darah` menampilkan *badge* sumber pembacaan (`Omron HEM-7156T` atau `Sensor MAX30102`).
+3. **Manajemen & Pairing Omron di Halaman `Pengaturan` (`templates/settings.html`)**:
+   - Kartu **Tensimeter BLE Omron HEM-7156T** menampilkan status live BlueZ (`Paired & Trusted`), input penyimpanan MAC Address (`00:5F:BF:E2:25:DC`), serta tombol **Scan & Pair Omron (`-P-`)** dengan umpan balik *real-time* via Socket.IO.
 
 ---

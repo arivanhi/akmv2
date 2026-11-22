@@ -255,7 +255,12 @@ def load_calibration():
         "tekanan_darah": {"sys_bias": 0.0, "dia_bias": 0.0},
         "gula_darah": {"gain": 1.0, "bias": 0.0},
         "kolesterol": {"gain": 1.0, "bias": 0.0},
-        "asam_urat": {"gain": 1.0, "bias": 0.0}
+        "asam_urat": {"gain": 1.0, "bias": 0.0},
+        "omron": {
+            "mac": os.getenv("BLE_OMRON_MAC", "00:5F:BF:E2:25:DC").upper(),
+            "name": "BLEsmart_0000057A005FBFE225DC",
+            "model": "HEM-7156T"
+        }
     }
     if os.path.exists(CALIBRATION_FILE):
         try:
@@ -312,6 +317,7 @@ def on_mqtt_connect(client, userdata, flags, reason_code, properties=None):
     client.subscribe("medical/suhu")
     client.subscribe("medical/spo2")
     client.subscribe("medical/spektro")
+    client.subscribe("medical/omron")
     client.subscribe(MQTT_PREDICTION_TOPIC)
     client.subscribe("akm/connect")
 
@@ -333,12 +339,20 @@ def on_mqtt_message(client, userdata, msg):
     status = data.get("status")
     target_mode = data.get("target_mode", "")
 
-    # 1. Progress pemindaian dari sensor_publisher Kopersakti
+    # 0. Status Pairing Tensimeter Omron HEM-7156T (medical/omron)
+    if topic == "medical/omron" and status in ("pairing_progress", "paired", "pair_error"):
+        socketio.emit("omron_pair_status", data)
+        return
+
+    # 1. Progress pemindaian dari sensor_publisher Kopersakti maupun Tensimeter BLE Omron
     if status == "scanning":
         socketio.emit("measurement_progress", {
             "remaining": data.get("remaining", 0),
             "progress": data.get("progress", 0),
-            "frames_collected": data.get("frames_collected")
+            "frames_collected": data.get("frames_collected"),
+            "message": data.get("message"),
+            "stage": data.get("stage"),
+            "source": "omron" if topic == "medical/omron" else "sensor"
         })
         return
 
@@ -346,7 +360,46 @@ def on_mqtt_message(client, userdata, msg):
     if status == "error":
         socketio.emit("measurement_error", {
             "type": data.get("type", target_mode),
+            "source": "omron" if topic == "medical/omron" else "sensor",
             "message": data.get("message", "Pembacaan sensor gagal.")
+        })
+        return
+
+    # 2b. Hasil Tensimeter BLE Omron HEM-7156T (medical/omron)
+    if topic == "medical/omron" and status == "done":
+        sys_val   = int(data.get("sys", 0))
+        dia_val   = int(data.get("dia", 0))
+        pulse_val = int(data.get("pulse", 0))
+        map_val   = int(data.get("map", 0))
+        dev_mac   = data.get("mac", "")
+        dev_name  = data.get("name", "Omron HEM-7156T")
+        m_at      = data.get("measured_at", "")
+        raw_meta  = data.get("raw_meta") or {}
+
+        log_id = save_raw_sensor_log(
+            "tensi_omron_ble",
+            {
+                "sys": sys_val,
+                "dia": dia_val,
+                "pulse": pulse_val,
+                "map": map_val,
+                "mac": dev_mac,
+                "device_name": dev_name,
+                "measured_at": m_at
+            },
+            float(sys_val),
+            raw_frames=raw_meta
+        )
+        socketio.emit("measurement_update", {
+            "type": "tensi",
+            "sys": sys_val,
+            "dia": dia_val,
+            "pulse": pulse_val,
+            "map": map_val,
+            "source": "omron",
+            "source_label": "Omron HEM-7156T (BLE)",
+            "measured_at": m_at,
+            "raw_log_id": log_id
         })
         return
 
@@ -398,6 +451,8 @@ def on_mqtt_message(client, userdata, msg):
                 "sys": sys_val,
                 "dia": dia_val,
                 "pulse": bpm_val,
+                "source": "sensor",
+                "source_label": "Sensor MAX30102 (PPG)",
                 "raw_log_id": log_id
             })
         if target_mode in ("spo2", "ppg_all"):
@@ -760,6 +815,8 @@ def handle_start_measurement(data):
 
     if flag == "suhu" or mtype == "suhu":
         mqtt_client.publish("medical/cmd/suhu", json.dumps({"cmd": "start", "target_mode": "suhu"}))
+    elif flag == "tensi_omron" or mtype == "tensi_omron":
+        mqtt_client.publish("medical/cmd/omron", json.dumps({"cmd": "start", "target_mode": "tensi_omron"}))
     elif flag in ("tensi", "spo2", "bpm", "ppg_all") or mtype in ("tensi", "spo2", "bpm", "ppg_all"):
         mqtt_client.publish("medical/cmd/spo2", json.dumps({"cmd": "start", "target_mode": mtype}))
     elif flag in ("gula_darah", "cholesterol", "asam_urat", "spektro_all") or mtype in ("gula_darah", "cholesterol", "asam_urat", "spektro_all"):
@@ -1566,7 +1623,128 @@ def debug_test_print():
 def bt_status():
     if g.user is None:
         return jsonify({"status": "inactive"}), 401
-    return jsonify({"status": "active" if ble_is_connected else "inactive"})
+    omron_st = get_omron_bluez_status()
+    is_active = ble_is_connected or omron_st.get("paired", False)
+    return jsonify({
+        "status": "active" if is_active else "inactive",
+        "scale_connected": ble_is_connected,
+        "omron": omron_st
+    })
+
+
+def get_omron_bluez_status():
+    """Memeriksa status Pairing / Bonding / Trust Tensimeter Omron HEM-7156T pada BlueZ host."""
+    cfg = load_calibration()
+    om_cfg = cfg.get("omron") if isinstance(cfg.get("omron"), dict) else {}
+    mac = (om_cfg.get("mac") or os.getenv("BLE_OMRON_MAC", "00:5F:BF:E2:25:DC")).strip().upper()
+    name = om_cfg.get("name") or "BLEsmart_0000057A005FBFE225DC"
+    model = om_cfg.get("model") or "HEM-7156T"
+    paired_at = om_cfg.get("paired_at") or "-"
+
+    res = {
+        "mac": mac,
+        "name": name,
+        "model": model,
+        "paired": False,
+        "bonded": False,
+        "trusted": False,
+        "connected": False,
+        "paired_at": paired_at,
+        "adapter_powered": False
+    }
+
+    try:
+        show_proc = subprocess.run(["bluetoothctl", "show"], capture_output=True, text=True, timeout=4)
+        if "Powered: yes" in (show_proc.stdout or ""):
+            res["adapter_powered"] = True
+    except Exception:
+        pass
+
+    try:
+        # Jika MAC belum terdeteksi di bluetoothctl, cek daftar devices BlueZ yang berawalan 00:5F:BF atau BLEsmart
+        info_proc = subprocess.run(["bluetoothctl", "info", mac], capture_output=True, text=True, timeout=4)
+        out = info_proc.stdout or ""
+        if "not available" in out.lower():
+            devs_proc = subprocess.run(["bluetoothctl", "devices"], capture_output=True, text=True, timeout=4)
+            for line in (devs_proc.stdout or "").splitlines():
+                if "BLESMART" in line.upper() or "00:5F:BF:" in line.upper() or "OMRON" in line.upper():
+                    parts = line.split(None, 2)
+                    if len(parts) >= 2:
+                        mac = parts[1].strip().upper()
+                        res["mac"] = mac
+                        if len(parts) >= 3:
+                            res["name"] = parts[2].strip()
+                        info_proc = subprocess.run(["bluetoothctl", "info", mac], capture_output=True, text=True, timeout=4)
+                        out = info_proc.stdout or ""
+                        break
+
+        for line in out.splitlines():
+            s = line.strip()
+            if s.startswith("Name:"):
+                val = s.split(":", 1)[1].strip()
+                if val:
+                    res["name"] = val
+            elif s.startswith("Paired:"):
+                res["paired"] = (s.split(":", 1)[1].strip().lower() == "yes")
+            elif s.startswith("Bonded:"):
+                res["bonded"] = (s.split(":", 1)[1].strip().lower() == "yes")
+            elif s.startswith("Trusted:"):
+                res["trusted"] = (s.split(":", 1)[1].strip().lower() == "yes")
+            elif s.startswith("Connected:"):
+                res["connected"] = (s.split(":", 1)[1].strip().lower() == "yes")
+    except Exception as e:
+        print(f"[OMRON STATUS WARN] {e}")
+
+    return res
+
+
+@app.route("/api/hardware/omron_status")
+def api_omron_status():
+    if g.user is None:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    st = get_omron_bluez_status()
+    return jsonify({"status": "success", **st})
+
+
+@app.route("/api/hardware/omron_pair", methods=["POST"])
+def api_omron_pair():
+    if g.user is None:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    payload = request.get_json(silent=True) or {}
+    req_mac = (payload.get("mac") or request.form.get("mac") or "").strip().upper() or None
+    mqtt_client.publish("medical/cmd/omron", json.dumps({"cmd": "pair", "mac": req_mac}))
+    return jsonify({
+        "status": "started",
+        "message": "Memulai pemindaian & pairing Tensimeter Omron HEM-7156T. Pastikan tensimeter menampilkan '-P-' berkedip."
+    })
+
+
+@app.route("/api/hardware/omron_save_mac", methods=["POST"])
+def api_omron_save_mac():
+    if g.user is None:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    payload = request.get_json(silent=True) or {}
+    new_mac = (payload.get("mac") or request.form.get("mac") or "").strip().upper()
+    if not new_mac or len(new_mac) != 17 or new_mac.count(":") != 5:
+        return jsonify({"status": "error", "message": "Format MAC Address tidak valid (contoh: 00:5F:BF:E2:25:DC)."}), 400
+
+    cfg = load_calibration()
+    om = cfg.get("omron") if isinstance(cfg.get("omron"), dict) else {}
+    om["mac"] = new_mac
+    om["model"] = om.get("model") or "HEM-7156T"
+    cfg["omron"] = om
+    try:
+        with open(CALIBRATION_FILE, "w") as f:
+            json.dump(cfg, f, indent=4)
+        subprocess.run(["bluetoothctl", "trust", new_mac], capture_output=True, timeout=4)
+        st = get_omron_bluez_status()
+        return jsonify({
+            "status": "success",
+            "message": f"MAC Address Omron ({new_mac}) berhasil disimpan.",
+            "omron": st
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Gagal menyimpan MAC Omron: {e}"}), 500
 
 
 @app.route("/api/hardware/reset_bt", methods=["POST"])
@@ -1576,6 +1754,9 @@ def reset_bt():
     try:
         subprocess.run(["rfkill", "unblock", "bluetooth"], capture_output=True, timeout=5)
         subprocess.run(["hciconfig", "hci0", "reset"], capture_output=True, timeout=5)
+        st = get_omron_bluez_status()
+        if st.get("mac"):
+            subprocess.run(["bluetoothctl", "trust", st["mac"]], capture_output=True, timeout=4)
         return jsonify({"status": "success", "message": "Adapter Bluetooth berhasil direset."})
     except Exception as e:
         return jsonify({"status": "error", "message": f"Gagal reset Bluetooth: {e}"})

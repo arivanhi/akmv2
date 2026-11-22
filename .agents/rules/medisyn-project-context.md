@@ -7,7 +7,7 @@ Dokumen aturan konteks otomatis untuk Google Antigravity saat membuka workspace 
 - **Repositori GitHub**: `https://github.com/arivanhi/akmv2.git` (branch utama: `main`).
 - **Perangkat Target (Live Raspberry Pi)**:
   - Model: Raspberry Pi 5 (8GB RAM), OS Debian 13 (Trixie) arm64, layar sentuh 7" `QDTECH MPI7002` (`1024x600`).
-  - Host / SSH: `admin@192.168.100.166` (direktori aplikasi: `/home/admin/akmv2`).
+  - Host / SSH: `admin@192.168.100.19` (sebelumnya `192.168.100.166`, password: `admin`, direktori aplikasi: `/home/admin/akmv2`).
   - Kiosk Autostart: `~/.config/labwc/autostart` menjalankan `/home/admin/akmv2/kiosk_autostart.sh` (Chromium fullscreen `http://127.0.0.1:5000`).
   - Penting: Jangan memutus koneksi `wlan0` saat mengakses Raspi melalui SSH.
 
@@ -21,9 +21,15 @@ Dokumen aturan konteks otomatis untuk Google Antigravity saat membuka workspace 
 ## 3. Konfigurasi Sensor I2C (`/dev/i2c-1`) & Literatur Spektral
 1. **`0x5A` — `MLX90614` (Suhu Tubuh Inframerah)**:
    - Durasi scan `5 detik` (`1 Hz`). Deteksi bus wajib menggunakan SMBus `read_word_data(0x5A, 0x07)` (bukan `read_byte`).
-2. **`0x57` — `MAX30102` (Oximeter SpO2, BPM, Estimasi Tensi SYS/DIA)**:
-   - Durasi scan `6 detik` (ADC internal `100 Hz` dengan FIFO averaging `4` = output `25 Hz` ≈ `150 sampel` Red & IR).
-   - `enable_leds()` selalu menulis ulang register `FIFO=0x50`, `SPO2=0x47`, `LED=0x37` untuk mencegah reset POR saat sensor cabut-pasang.
+2. **`0x57` — `MAX30102` (Oximeter SpO2, BPM, Estimasi Tensi SYS/DIA)** & **Tensimeter BLE `Omron HEM-7156T`**:
+   - **2 Metode Pembacaan Tekanan Darah (`templates/measure.html`)**:
+     1. **Tensimeter Omron HEM-7156T (Bluetooth BLE)**:
+        - Nama perangkat: `BLEsmart_0000057A005FBFE225DC`, MAC Default: `00:5F:BF:E2:25:DC` (Service `0x1810`, Characteristic `0x2A35` IEEE-11073 16-bit SFLOAT, Time Sync `0x2A2B`, RACP `0x2A52`).
+        - Dikelola oleh `ble_scale_service.py` dengan *single-radio adapter lock* (`hci0`) via topik MQTT `medical/cmd/omron` -> `medical/omron`, serta dicatat ke `raw_sensor_data` dengan `sensor_type = 'tensi_omron_ble'`.
+        - Fitur **Scan & Pair Omron (`-P-`)** tersedia di halaman **Pengaturan** (`/settings`) maupun langsung di modal **Pilih Metode Pengukuran Tekanan Darah** (`/measure`).
+     2. **Sensor Optik `MAX30102` (`0x57`)**:
+        - Durasi scan `6 detik` (ADC internal `100 Hz` dengan FIFO averaging `4` = output `25 Hz` ≈ `150 sampel` Red & IR).
+        - `enable_leds()` selalu menulis ulang register `FIFO=0x50`, `SPO2=0x47`, `LED=0x37` untuk mencegah reset POR saat sensor cabut-pasang.
 3. **`0x49` — `AS7265x` Triad 18-Channel (`410–940 nm`, Gula Darah, Kolesterol, Asam Urat)**:
    - Sampling kontinu optimal **`~3.3 – 3.5 Hz`** (`INTEG = 49` ≈ `278 ms/frame`, `Gain = 64x`, arus 3 LED `25 mA`), durasi scan **`7 detik`** (`~20–25 frame` × 18 kanal).
    - Pra-pemrosesan: buang `2 frame` transien awal (*settling time*), saring *outlier* goyangan jari per kanal dengan metode **IQR (*Interquartile Range*)**, dan hitung normalisasi **L2**.

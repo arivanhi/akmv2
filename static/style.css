@@ -2168,3 +2168,124 @@ body.auth-page.vk-body-padded {
     opacity: 0.9 !important;
     cursor: not-allowed !important;
 }
+
+/* ===================================================== */
+/* MEDISYN: Modal Pilih Metode Tekanan Darah (Omron/PPG) */
+/* ===================================================== */
+.tensi-method-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.tensi-method-card {
+    border: 1.5px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 14px 16px;
+    background: #f8fafc;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.tensi-method-card.omron {
+    border-left: 5px solid #2563eb;
+    background: linear-gradient(135deg, #f8fbff 0%, #f1f5f9 100%);
+}
+
+.tensi-method-card.sensor {
+    border-left: 5px solid #08999c;
+    background: linear-gradient(135deg, #f4fbfb 0%, #f1f5f9 100%);
+}
+
+.tensi-method-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.tensi-method-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+    flex-shrink: 0;
+}
+
+.tensi-method-icon.omron {
+    background: rgba(37, 99, 235, 0.14);
+    color: #1d4ed8;
+}
+
+.tensi-method-icon.sensor {
+    background: rgba(8, 153, 156, 0.15);
+    color: #08999c;
+}
+
+.tensi-method-title {
+    font-weight: 700;
+    font-size: 1.02rem;
+    color: #0f172a;
+}
+
+.tensi-method-sub {
+    font-size: 0.78rem;
+    color: #64748b;
+    font-family: monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tensi-method-desc {
+    font-size: 0.85rem;
+    color: #475569;
+    margin: 0 0 10px 0;
+    line-height: 1.4;
+}
+
+.tensi-pair-pill {
+    font-size: 0.74rem;
+    font-weight: 700;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: #e2e8f0;
+    color: #334155;
+    white-space: nowrap;
+}
+
+.tensi-pair-pill.ok {
+    background: #dcfce7;
+    color: #166534;
+    border: 1px solid #bbf7d0;
+}
+
+.tensi-pair-pill.warn {
+    background: #fef3c7;
+    color: #92400e;
+    border: 1px solid #fde68a;
+}
+
+.tensi-card-src {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+.tensi-card-src.omron {
+    background: rgba(37, 99, 235, 0.35);
+    color: #bfdbfe;
+    border: 1px solid rgba(147, 197, 253, 0.5);
+}
+
+.tensi-card-src.sensor {
+    background: rgba(16, 185, 129, 0.28);
+    color: #a7f3d0;
+    border: 1px solid rgba(110, 231, 183, 0.45);
+}

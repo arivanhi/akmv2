@@ -119,17 +119,29 @@
                 <div class="settings-header">
                     <div class="settings-icon-wrapper"><i class="fab fa-bluetooth-b"></i></div>
                     <div class="settings-title">
-                        <h4>Koneksi Bluetooth</h4>
-                        <p>Adapter BLE Timbangan Opsional</p>
+                        <h4>Tensimeter BLE Omron HEM-7156T</h4>
+                        <p id="omronDeviceNameLabel">{{ calib.omron.name if calib and calib.omron else 'BLEsmart_0000057A005FBFE225DC' }}</p>
                     </div>
                 </div>
-                <p style="font-size: 0.9rem; color: #666; line-height: 1.5;">
-                    Pantau status koneksi timbangan BLE atau restart adapter Bluetooth perangkat.
+                <p style="font-size: 0.86rem; color: #555; line-height: 1.45; margin-bottom: 10px;">
+                    Untuk pairing baru: tahan tombol <strong>Bluetooth</strong> di tensimeter Omron ±3 detik hingga muncul <strong>-P-</strong> berkedip, lalu tekan <strong>Scan &amp; Pair Omron</strong>.
                 </p>
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+                    <input type="text" id="omronMacInput" class="form-control" value="{{ calib.omron.mac if calib and calib.omron else '00:5F:BF:E2:25:DC' }}" placeholder="00:5F:BF:E2:25:DC" style="height: 36px; font-family: monospace; font-size: 0.88rem; padding: 6px 10px;">
+                    <button type="button" id="btnSaveOmronMac" class="btn-setting outline" style="flex: 0 0 auto; padding: 6px 12px; font-size: 0.82rem;">
+                        <i class="fas fa-save"></i> Simpan MAC
+                    </button>
+                </div>
+                <div id="omronPairFeedback" style="display: none; font-size: 0.82rem; padding: 8px 10px; border-radius: 6px; margin-bottom: 8px;"></div>
             </div>
-            <div class="settings-actions">
+            <div class="settings-actions" style="flex-wrap: wrap;">
                 <div id="btStatusBadge" class="btn-setting outline" style="cursor: default; font-weight: 600;">Status: Checking...</div>
-                <button id="btnResetBt" class="btn-setting primary" style="background-color: #fff; color: #dc3545; border: 1px solid #dc3545; font-weight: 600;">Reset Bluetooth</button>
+                <button type="button" id="btnPairOmron" class="btn-setting primary">
+                    <i class="fas fa-link"></i> Scan &amp; Pair Omron (-P-)
+                </button>
+                <button type="button" id="btnResetBt" class="btn-setting primary" style="background-color: #fff; color: #dc3545; border: 1px solid #dc3545; font-weight: 600;">
+                    Reset BT
+                </button>
             </div>
         </div>
     </div>
@@ -349,6 +361,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <script>
 function fetchNetworkInfo() {
     $('#txtSsid').text('...');
@@ -526,16 +539,87 @@ $(document).ready(function() {
     });
 
     function checkBt() {
-        $.get('/api/hardware/bt_status', function(res) {
+        $.get('/api/hardware/omron_status', function(res) {
             let badge = $('#btStatusBadge');
-            if (res.status === 'active') {
-                badge.css({'color': '#155724', 'background-color': '#d4edda', 'border-color': '#c3e6cb'}).text('Status: Connected');
+            if (res && res.status === 'success') {
+                if (res.name) $('#omronDeviceNameLabel').text(res.name + ' (' + (res.model || 'HEM-7156T') + ')');
+                if (res.mac) $('#omronMacInput').val(res.mac);
+                if (res.paired && res.trusted) {
+                    badge.css({'color': '#155724', 'background-color': '#d4edda', 'border-color': '#c3e6cb'})
+                         .html('<i class="fas fa-check-circle"></i> Omron Paired & Trusted');
+                } else if (res.paired) {
+                    badge.css({'color': '#155724', 'background-color': '#d4edda', 'border-color': '#c3e6cb'})
+                         .html('<i class="fas fa-check"></i> Omron Paired');
+                } else {
+                    badge.css({'color': '#856404', 'background-color': '#fff3cd', 'border-color': '#ffeeba'})
+                         .html('<i class="fas fa-exclamation-circle"></i> Belum Paired');
+                }
             } else {
-                badge.css({'color': '#721c24', 'background-color': '#f8d7da', 'border-color': '#f5c6cb'}).text('Status: Standby / Disconnected');
+                badge.css({'color': '#721c24', 'background-color': '#f8d7da', 'border-color': '#f5c6cb'}).text('Status: Standby');
             }
         });
     }
     checkBt();
+
+    $('#btnSaveOmronMac').click(function() {
+        const mac = ($('#omronMacInput').val() || '').trim().toUpperCase();
+        const btn = $(this);
+        const ori = btn.html();
+        btn.prop('disabled', true).text('Menyimpan...');
+        $.ajax({
+            url: '/api/hardware/omron_save_mac',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ mac: mac }),
+            success: function(res) {
+                $('#omronPairFeedback').show().css({'background': '#dcfce7', 'color': '#166534'}).text(res.message);
+                checkBt();
+            },
+            error: function(xhr) {
+                const msg = (xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : 'Format MAC tidak valid.';
+                $('#omronPairFeedback').show().css({'background': '#fee2e2', 'color': '#991b1b'}).text(msg);
+            },
+            complete: function() {
+                btn.prop('disabled', false).html(ori);
+            }
+        });
+    });
+
+    $('#btnPairOmron').click(function() {
+        const mac = ($('#omronMacInput').val() || '').trim().toUpperCase();
+        const btn = $(this);
+        btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Memindai -P-...');
+        $('#omronPairFeedback').show().css({'background': '#eff6ff', 'color': '#1e40af'})
+            .html('<i class="fas fa-spinner fa-spin"></i> Tahan tombol Bluetooth pada tensimeter Omron ±3 detik hingga muncul <strong>-P-</strong> berkedip...');
+        $.ajax({
+            url: '/api/hardware/omron_pair',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ mac: mac })
+        });
+    });
+
+    try {
+        const settingsSocket = io();
+        settingsSocket.on('omron_pair_status', function(data) {
+            const box = $('#omronPairFeedback');
+            box.show();
+            if (data.status === 'pairing_progress') {
+                box.css({'background': '#eff6ff', 'color': '#1e40af'})
+                   .html('<i class="fas fa-spinner fa-spin"></i> ' + data.message);
+            } else if (data.status === 'paired') {
+                box.css({'background': '#dcfce7', 'color': '#166534'})
+                   .html('<i class="fas fa-check-circle"></i> ' + data.message);
+                $('#btnPairOmron').prop('disabled', false).html('<i class="fas fa-link"></i> Scan & Pair Omron (-P-)');
+                checkBt();
+            } else if (data.status === 'pair_error') {
+                box.css({'background': '#fee2e2', 'color': '#991b1b'})
+                   .html('<i class="fas fa-exclamation-triangle"></i> ' + data.message);
+                $('#btnPairOmron').prop('disabled', false).html('<i class="fas fa-link"></i> Scan & Pair Omron (-P-)');
+                checkBt();
+            }
+        });
+    } catch (e) {}
 
     $('#btnResetBt').click(function() {
         if (!confirm("Restart service bluetooth?")) return;
@@ -543,8 +627,8 @@ $(document).ready(function() {
         btn.prop('disabled', true).text('Resetting...');
         $.post('/api/hardware/reset_bt', function(res) {
             alert(res.message);
-            setTimeout(checkBt, 3000);
-        }).always(() => btn.prop('disabled', false).text('Reset Bluetooth'));
+            setTimeout(checkBt, 2000);
+        }).always(() => btn.prop('disabled', false).text('Reset BT'));
     });
 
     fetchNetworkInfo();

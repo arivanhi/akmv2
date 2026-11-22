@@ -6,7 +6,10 @@ Perpaduan arsitektur web **AKM** (`Flask-SocketIO` + `PostgreSQL 15` + `Mosquitt
 1. **Antarmuka & Alur Kerja AKM Lengkap**: Login multi-role (`admin` & `operator`), registrasi pasien dengan autocomplete Provinsi/Kecamatan/Kelurahan Kota Semarang, riwayat & grafik `Chart.js`, edit/hapus pasien, cetak struk thermal USB ESC/POS, ekspor CSV, dan kirim data ke API Puskesmas/Dinkes.
 2. **9 Parameter Pemeriksaan**:
    - **Spektroskopi Optik 18-Kanal (`AS7265x`, I2C `0x49`)**: Gula Darah, Kolesterol, Asam Urat (mendukung ukur satuan maupun **Paket Cepat Spektro 3-in-1**).
-   - **Oximeter & Morfologi PPG (`MAX30102`, I2C `0x57`)**: Tekanan Darah (`SYS/DIA`), SpO2 (`%`), Detak Jantung (`BPM`) (mendukung ukur satuan maupun **Paket Cepat Oximeter 3-in-1**).
+   - **Tekanan Darah (`SYS/DIA` & `Pulse`) — 2 Metode Pembacaan**:
+     1. **Tensimeter BLE Omron HEM-7156T (`00:5F:BF:E2:25:DC` / `BLEsmart`, Service `0x1810` / Char `0x2A35`)**: Akuisisi otomatis dari manset lengan disertai fitur **Scan & Pairing (`-P-`)** langsung dari antarmuka web.
+     2. **Sensor Oximeter & Morfologi PPG (`MAX30102`, I2C `0x57`)**: Estimasi non-manset berbasis *Pulse Wave Analysis* (6 detik).
+   - **Oximeter (`MAX30102`, I2C `0x57`)**: SpO2 (`%`) & Detak Jantung (`BPM`) (mendukung ukur satuan maupun **Paket Cepat Oximeter 3-in-1**).
    - **Termometer Inframerah (`MLX90614`, I2C `0x5A`)**: Suhu Tubuh (`°C`).
    - **Antropometri**: Tinggi Badan (`cm`) & Berat Badan (`kg`) via sensor BLE otomatis atau **Input Manual**.
 3. **Validasi Sensor Jujur & Kalibrasi Terpusat**: Tanpa angka dummy/acak saat sensor terlepas; status fisik ketiga alamat I2C (`0x49`, `0x57`, `0x5A`) serta offset kalibrasi (`calibration_config.json`) dapat dikelola langsung dari menu **Pengaturan**.

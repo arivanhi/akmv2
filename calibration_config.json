@@ -23,5 +23,10 @@
     "asam_urat": {
         "gain": 1.0,
         "bias": 0.0
+    },
+    "omron": {
+        "mac": "00:5F:BF:E2:25:DC",
+        "name": "BLEsmart_0000057A005FBFE225DC",
+        "model": "HEM-7156T"
     }
 }
