@@ -51,5 +51,6 @@ Dokumen aturan konteks otomatis untuk Google Antigravity saat membuka workspace 
 ## 5. UX Khusus & Aset Logo
 - **Touch Virtual Keyboard**: `static/virtual-keyboard.js` menangani input layar sentuh `QDTECH MPI7002` secara native di web.
 - **Alur Konfirmasi Pengukuran**: Kartu hasil menampilkan tombol `[Ulang]` dan `[Selesai]` -> memunculkan modal konfirmasi *"Apakah hasil pengukuran berikut sudah sesuai semua?"* -> mengunci parameter yang sudah sesuai dan mengubah tombol pilihannya menjadi **abu-abu (`grey`)**.
+- **Penguncian Menu Navigasi Selama Sesi Pengukuran**: Saat sesi pengukuran pasien sedang berjalan di `templates/measure.html`, seluruh menu navigasi di *sidebar* otomatis dikunci (`.sidebar.session-locked` dengan ikon gembok & *toast* peringatan) agar operator tidak salah menekan menu lain di tengah sesi. Menu kembali terbuka otomatis setelah menekan **`Simpan & Selesai Sesi`** atau **`Ganti Pasien Lain`**.
 - **Sidebar & Logo**: Saat sidebar di-*minimize*, hanya menampilkan ikon huruf **`M` MEDISYN** (`static/img/logo_medisyn_icon.png`). File master PNG resolusi tinggi `300 DPI` tersimpan di folder `logo/` (`logo_m.png`, `logo_medisyn_penuh.png`, `logo_udinus.png`).
 - Riwayat percakapan lengkap pembangunan sistem ini tersimpan di `HANDOFF_CHAT_HISTORY.md`.

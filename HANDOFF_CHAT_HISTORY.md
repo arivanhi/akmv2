@@ -679,3 +679,19 @@ ada tambahan sedikit ya, untuk yang omron dan oxymeter ini, saat sudah mengukur 
      - **`Export CSV Pembanding MAX30102 vs Omron`** (`GET /api/ml_dataset/export_ppg_omron_csv`).
 
 ---
+
+### Turn 23 (2026-11-22 03:35:52 UTC)
+**USER:**
+
+ok saya mau memperbaiki sedikit logiknya, saat melakukan mulai proses pengukuran (memilih sesi pengukuran) maka menu lain tidak bisa diakses sampai selesai sesi atau ganti pasien lain ya, agar operator tidak salah menekan menu dan mengulang dari awal.
+
+**ANTIGRAVITY:**
+
+1. **Penguncian Menu Sidebar Selama Sesi Pengukuran Aktif (`templates/measure.html`, `static/style.css`)**:
+   - Begitu sesi pasien dimulai (`showPatientDataAndControls` / `openMeasurementChoiceModal`), *sidebar* otomatis dikunci (`.sidebar.session-locked` dengan ikon gembok `🔒` pada setiap menu).
+   - Jika operator tidak sengaja menyentuh menu *sidebar* (`Home`, `Input Pasien`, `Data Pengukuran`, `Pengaturan`, dll.) di tengah sesi pengukuran, navigasi diblokir dan muncul *toast* peringatan di bagian atas layar tanpa memutus atau mereset pengukuran yang sedang berjalan.
+2. **Pembukaan Kunci Otomatis Saat Selesai Sesi atau Ganti Pasien**:
+   - Menu *sidebar* otomatis terbuka kembali begitu operator menekan **`Simpan & Selesai Sesi`** (`save_status: success`).
+   - Ditambahkan tombol **`Ganti Pasien Lain`** pada panel kontrol pasien maupun di dalam modal **Pilih Jenis Pengukuran** (dengan konfirmasi apabila sudah ada data yang terukur) untuk mereset sesi ke pemilihan pasien lain sekaligus membuka kembali kunci menu *sidebar*.
+
+---
