@@ -92,7 +92,7 @@
                     <span id="omronModalPairBadge" class="tensi-pair-pill">Memeriksa...</span>
                 </div>
                 <p class="tensi-method-desc">
-                    Pengukuran manset lengan otomatis via Bluetooth Low Energy (Service <code>0x1810</code> / Characteristic <code>0x2A35</code>).
+                    Pengukuran manset lengan otomatis via Bluetooth Low Energy (Service <code>0x1810</code> / Characteristic <code>0x2A35</code>). Hasil detak nadi (<strong>BPM</strong>) juga otomatis dimasukkan ke kartu <strong>Detak Jantung</strong>.
                 </p>
                 <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                     <button type="button" id="btnChooseTensiOmron" class="btn-modal btn-primary" style="flex: 2; padding: 10px 14px; font-size: 0.95rem;">
@@ -973,6 +973,17 @@
                 if (data.raw_log_id) currentSessionData.raw_log_ids['tensi'] = data.raw_log_id;
                 box.find(".classification-status").text(classifyTensi(data.sys, data.dia));
                 showPendingCardActions('tensi');
+
+                // Saat menggunakan Tensimeter Omron, hasil BPM/Pulse otomatis dimasukkan juga ke kartu Detak Jantung
+                if (data.source === 'omron' && parseInt(data.pulse) > 0 && !confirmedTypes.has('bpm')) {
+                    const bpmVal = parseInt(data.pulse);
+                    const bpmBox = $(`.result-box[data-type="bpm"]`);
+                    bpmBox.find(".value").text(`${bpmVal} bpm`);
+                    currentSessionData.results['bpm'] = bpmVal;
+                    if (data.raw_log_id) currentSessionData.raw_log_ids['bpm'] = data.raw_log_id;
+                    bpmBox.find(".classification-status").text(getHealthStatus('bpm', bpmVal, currentSessionData.patient_gender));
+                    showPendingCardActions('bpm');
+                }
             }
             else if (data.type === 'spo2' && !confirmedTypes.has('spo2')) {
                 const box = $(`.result-box[data-type="spo2"]`);

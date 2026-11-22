@@ -647,3 +647,14 @@ ok sekarang raspinya ada di alamat 192.168.100.19, username admin, pass admin. s
    - Kartu **Tensimeter BLE Omron HEM-7156T** menampilkan status live BlueZ (`Paired & Trusted`), input penyimpanan MAC Address (`00:5F:BF:E2:25:DC`), serta tombol **Scan & Pair Omron (`-P-`)** dengan umpan balik *real-time* via Socket.IO.
 
 ---
+
+### Turn 21 (2026-11-22 03:06:31 UTC)
+**USER:**
+
+ok mungkin ada perbaikan sedikit ya, saat dengan omron kan menghasilkan detak jantung juga, nah hasil bpmnya, di masukan saja ke detak jantungnya
+
+**ANTIGRAVITY:**
+
+Diperbarui pada `templates/measure.html`: ketika pengukuran Tekanan Darah menggunakan **Tensimeter Omron HEM-7156T** selesai, nilai detak nadi (`pulse / BPM`) yang dikirim oleh Omron kini **otomatis dimasukkan juga ke kartu hasil `Detak Jantung` (`bpm`)** lengkap dengan klasifikasi klinisnya (*Normal / Bradikardia / Takikardia*) dan ikut masuk ke daftar konfirmasi hasil (`[ Ulang ]` / `[ Selesai ]`), sehingga petugas tidak perlu mengukur Detak Jantung lagi secara terpisah.
+
+---

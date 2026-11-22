@@ -26,6 +26,7 @@ Dokumen aturan konteks otomatis untuk Google Antigravity saat membuka workspace 
      1. **Tensimeter Omron HEM-7156T (Bluetooth BLE)**:
         - Nama perangkat: `BLEsmart_0000057A005FBFE225DC`, MAC Default: `00:5F:BF:E2:25:DC` (Service `0x1810`, Characteristic `0x2A35` IEEE-11073 16-bit SFLOAT, Time Sync `0x2A2B`, RACP `0x2A52`).
         - Dikelola oleh `ble_scale_service.py` dengan *single-radio adapter lock* (`hci0`) via topik MQTT `medical/cmd/omron` -> `medical/omron`, serta dicatat ke `raw_sensor_data` dengan `sensor_type = 'tensi_omron_ble'`.
+        - Hasil detak nadi (`Pulse / BPM`) dari Omron otomatis dimasukkan ke kartu **Detak Jantung (`bpm`)** sekaligus kartu **Tekanan Darah (`tensi`)**.
         - Fitur **Scan & Pair Omron (`-P-`)** tersedia di halaman **Pengaturan** (`/settings`) maupun langsung di modal **Pilih Metode Pengukuran Tekanan Darah** (`/measure`).
      2. **Sensor Optik `MAX30102` (`0x57`)**:
         - Durasi scan `6 detik` (ADC internal `100 Hz` dengan FIFO averaging `4` = output `25 Hz` ≈ `150 sampel` Red & IR).
