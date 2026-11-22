@@ -94,6 +94,7 @@
                 <p class="tensi-method-desc">
                     Pengukuran manset lengan otomatis via Bluetooth Low Energy (Service <code>0x1810</code> / Characteristic <code>0x2A35</code>). Hasil detak nadi (<strong>BPM</strong>) juga otomatis dimasukkan ke kartu <strong>Detak Jantung</strong>.
                 </p>
+                <div id="omronSessionValueInfo" style="display:none; margin-bottom:8px; padding:6px 10px; border-radius:6px; background:#dbeafe; color:#1e40af; font-size:0.82rem; font-weight:700;"></div>
                 <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                     <button type="button" id="btnChooseTensiOmron" class="btn-modal btn-primary" style="flex: 2; padding: 10px 14px; font-size: 0.95rem;">
                         <i class="fab fa-bluetooth-b"></i> Gunakan Tensimeter Omron
@@ -115,8 +116,9 @@
                     <span class="tensi-pair-pill ok">Siap</span>
                 </div>
                 <p class="tensi-method-desc">
-                    Estimasi tekanan darah non-manset dari analisis gelombang nadi ujung jari (<em>Pulse Wave Analysis</em>) selama 6 detik.
+                    Estimasi tekanan darah non-manset dari analisis gelombang nadi ujung jari (<em>Pulse Wave Analysis</em>) selama 6 detik. Dapat diukur bersama Omron sebagai data pembanding <em>fine-tuning</em> &amp; kalibrasi.
                 </p>
+                <div id="sensorSessionValueInfo" style="display:none; margin-bottom:8px; padding:6px 10px; border-radius:6px; background:#ccfbf1; color:#115e59; font-size:0.82rem; font-weight:700;"></div>
                 <button type="button" id="btnChooseTensiSensor" class="btn-modal btn-success" style="width: 100%; padding: 10px 14px; font-size: 0.95rem; background: #08999c;">
                     <i class="fas fa-fingerprint"></i> Gunakan Sensor MAX30102
                 </button>
@@ -430,11 +432,23 @@
                         btn.prop("disabled", false).removeClass("btn-selesai").html(`<i class="fas fa-bolt"></i> ${baseLabel}`);
                     }
                 } else if (type === "ppg_all") {
-                    const allDone = ["tensi", "spo2", "bpm"].every(t => confirmedTypes.has(t));
+                    const hasSensorTensi = Boolean(currentSessionData.results && currentSessionData.results.tensi_sensor);
+                    const allDone = hasSensorTensi && ["tensi", "spo2", "bpm"].every(t => confirmedTypes.has(t));
                     if (allDone) {
                         btn.prop("disabled", true).addClass("btn-selesai").html(`<i class="fas fa-check-circle"></i> ${baseLabel} (Sesuai)`);
                     } else {
                         btn.prop("disabled", false).removeClass("btn-selesai").html(`<i class="fas fa-heartbeat"></i> ${baseLabel}`);
+                    }
+                } else if (type === "tensi") {
+                    const hasOmron = Boolean(currentSessionData.results && currentSessionData.results.tensi_omron);
+                    const hasSensor = Boolean(currentSessionData.results && currentSessionData.results.tensi_sensor);
+                    if (confirmedTypes.has("tensi") && hasOmron && hasSensor) {
+                        btn.prop("disabled", true).addClass("btn-selesai").html(`<i class="fas fa-check-double"></i> ${baseLabel} (2/2 Sesuai)`);
+                    } else if (confirmedTypes.has("tensi") && (hasOmron || hasSensor)) {
+                        const missingLbl = hasOmron ? "+Sensor" : "+Omron";
+                        btn.prop("disabled", false).removeClass("btn-selesai").html(`<i class="fas fa-exchange-alt"></i> ${baseLabel} (${missingLbl})`);
+                    } else {
+                        btn.prop("disabled", false).removeClass("btn-selesai").text(baseLabel);
                     }
                 } else {
                     if (confirmedTypes.has(type)) {
@@ -496,6 +510,7 @@
             $(".result-box .measure-status").text("");
             $('.result-box .action-buttons').remove();
             $('.result-box .gt-meta-bar').remove();
+            $('.result-box .tensi-compare-box').remove();
             $(".classification-status").text("");
         }
 
@@ -560,8 +575,106 @@
 
         function openTensiMethodModal() {
             $("#omronModalPairMsg").hide().text("");
+            const om = currentSessionData.results.tensi_omron;
+            const sn = currentSessionData.results.tensi_sensor;
+
+            if (om) {
+                $("#omronSessionValueInfo").show().html(`<i class="fas fa-check-circle"></i> Sudah Diukur: ${om.sys}/${om.dia} mmHg • ${om.pulse} bpm`);
+                $("#btnChooseTensiOmron").html('<i class="fab fa-bluetooth-b"></i> Ukur Ulang dgn Tensimeter Omron');
+            } else {
+                $("#omronSessionValueInfo").hide().text("");
+                $("#btnChooseTensiOmron").html(sn ? '<i class="fab fa-bluetooth-b"></i> + Ukur Pembanding: Tensimeter Omron' : '<i class="fab fa-bluetooth-b"></i> Gunakan Tensimeter Omron');
+            }
+
+            if (sn) {
+                $("#sensorSessionValueInfo").show().html(`<i class="fas fa-check-circle"></i> Sudah Diukur: ${sn.sys}/${sn.dia} mmHg • ${sn.pulse} bpm`);
+                $("#btnChooseTensiSensor").html('<i class="fas fa-fingerprint"></i> Ukur Ulang dgn Sensor MAX30102');
+            } else {
+                $("#sensorSessionValueInfo").hide().text("");
+                $("#btnChooseTensiSensor").html(om ? '<i class="fas fa-fingerprint"></i> + Ukur Pembanding: Sensor MAX30102' : '<i class="fas fa-fingerprint"></i> Gunakan Sensor MAX30102');
+            }
+
             refreshOmronModalStatus();
             $("#tensiMethodModal").css("display", "flex");
+        }
+
+        function renderTensiAndBpmComparison() {
+            const om = currentSessionData.results.tensi_omron;
+            const sn = currentSessionData.results.tensi_sensor;
+            const tensiBox = $(`.result-box[data-type="tensi"]`);
+            const bpmBox = $(`.result-box[data-type="bpm"]`);
+
+            tensiBox.find(".tensi-compare-box").remove();
+            bpmBox.find(".tensi-compare-box").remove();
+
+            if (!om && !sn) return;
+
+            // Tampilkan nilai utama pada kartu Tekanan Darah (Utamakan nilai klinis Omron jika tersedia)
+            const primary = om || sn;
+            const primarySrcTag = om
+                ? '<span class="tensi-card-src omron"><i class="fab fa-bluetooth-b"></i> Omron HEM-7156T</span>'
+                : '<span class="tensi-card-src sensor"><i class="fas fa-fingerprint"></i> Sensor MAX30102</span>';
+
+            tensiBox.find(".value").text(`${primary.sys}/${primary.dia} mmHg`);
+            tensiBox.find(".numeric-indicator").html(`Pulse: ${primary.pulse} bpm ${primarySrcTag}`);
+            tensiBox.find(".classification-status").text(classifyTensi(primary.sys, primary.dia));
+            currentSessionData.results["tensi"] = {
+                sys: primary.sys,
+                dia: primary.dia,
+                pulse: primary.pulse,
+                source: om && sn ? "both" : (om ? "omron" : "sensor")
+            };
+
+            if (om && sn) {
+                const dSys = om.sys - sn.sys;
+                const dDia = om.dia - sn.dia;
+                const dBpm = (om.pulse > 0 && sn.pulse > 0) ? (om.pulse - sn.pulse) : 0;
+                const fmtDiff = (v) => (v > 0 ? `+${v}` : `${v}`);
+
+                const cmpHtml = $(`
+                    <div class="tensi-compare-box" style="margin-top:8px; padding:7px 10px; border-radius:8px; background:rgba(15,23,42,0.35); border:1px solid rgba(255,255,255,0.22); font-size:0.75rem; text-align:left; line-height:1.45;">
+                        <div style="display:flex; justify-content:space-between;">
+                            <span><i class="fab fa-bluetooth-b" style="color:#93c5fd;"></i> Omron (Standar):</span>
+                            <strong>${om.sys}/${om.dia} mmHg (${om.pulse} bpm)</strong>
+                        </div>
+                        <div style="display:flex; justify-content:space-between;">
+                            <span><i class="fas fa-fingerprint" style="color:#6ee7b7;"></i> Sensor MAX30102:</span>
+                            <strong>${sn.sys}/${sn.dia} mmHg (${sn.pulse} bpm)</strong>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; border-top:1px dashed rgba(255,255,255,0.2); margin-top:3px; padding-top:3px; color:#fde047;">
+                            <span><i class="fas fa-balance-scale"></i> Selisih (Omron−Sensor):</span>
+                            <strong>SYS ${fmtDiff(dSys)}, DIA ${fmtDiff(dDia)}</strong>
+                        </div>
+                    </div>
+                `);
+                tensiBox.find(".classification-status").after(cmpHtml);
+
+                if (om.pulse > 0 && sn.pulse > 0) {
+                    const bpmCmp = $(`
+                        <div class="tensi-compare-box" style="margin-top:8px; padding:6px 10px; border-radius:8px; background:rgba(15,23,42,0.35); border:1px solid rgba(255,255,255,0.22); font-size:0.75rem; text-align:left; line-height:1.4;">
+                            <div style="display:flex; justify-content:space-between;">
+                                <span>Omron: <strong>${om.pulse} bpm</strong></span>
+                                <span>Sensor: <strong>${sn.pulse} bpm</strong></span>
+                                <span style="color:#fde047;">Δ <strong>${fmtDiff(dBpm)}</strong></span>
+                            </div>
+                        </div>
+                    `);
+                    bpmBox.find(".classification-status").after(bpmCmp);
+                }
+            } else if (!sessionFinalized) {
+                const otherLabel = om ? "+ Bandingkan dgn Sensor MAX30102" : "+ Bandingkan dgn Tensimeter Omron";
+                const btnAddCompare = $(`
+                    <div class="tensi-compare-box" style="margin-top:8px;">
+                        <button type="button" class="btn-add-tensi-compare" style="background:rgba(255,255,255,0.16); color:#f8fafc; border:1px dashed rgba(255,255,255,0.55); border-radius:14px; padding:4px 11px; font-size:0.75rem; font-weight:600; cursor:pointer;">
+                            <i class="fas fa-balance-scale"></i> ${otherLabel}
+                        </button>
+                    </div>
+                `);
+                btnAddCompare.find(".btn-add-tensi-compare").on("click", function () {
+                    openTensiMethodModal();
+                });
+                tensiBox.find(".classification-status").after(btnAddCompare);
+            }
         }
 
         function executeMeasurement(type, flag, label) {
@@ -583,6 +696,10 @@
         }
 
         function startSingleRepeat(type) {
+            if (type === "tensi") {
+                openTensiMethodModal();
+                return;
+            }
             const btn = $(`.btn-measure[data-type="${type}"]`);
             const flag = btn.data("flag");
             const label = btn.data("label") || TYPE_LABELS[type] || type;
@@ -593,7 +710,6 @@
             box.find(".gt-meta-bar").remove();
             box.find(".value").text("-");
             box.find(".classification-status").text("");
-            if (type === "tensi") box.find(".numeric-indicator").text("Pulse: - bpm");
             box.find(".measure-status").text("Mengulang...");
             unconfirmedTypes.delete(type);
             confirmedTypes.delete(type);
@@ -957,31 +1073,38 @@
             $("#loadingOverlay").fadeOut();
             if (sessionFinalized) return;
 
-            if (data.type === 'tensi' && !confirmedTypes.has('tensi')) {
-                const box = $(`.result-box[data-type="tensi"]`);
-                box.find(".value").text(`${data.sys}/${data.dia} mmHg`);
-                const srcTag = (data.source === 'omron')
-                    ? '<span class="tensi-card-src omron"><i class="fab fa-bluetooth-b"></i> Omron HEM-7156T</span>'
-                    : '<span class="tensi-card-src sensor"><i class="fas fa-fingerprint"></i> Sensor MAX30102</span>';
-                box.find(".numeric-indicator").html(`Pulse: ${data.pulse} bpm ${srcTag}`);
-                currentSessionData.results['tensi'] = {
-                    sys: parseInt(data.sys),
-                    dia: parseInt(data.dia),
-                    pulse: parseInt(data.pulse),
-                    source: data.source || 'sensor'
-                };
+            if (data.type === 'tensi') {
+                // Buka kembali konfirmasi pada kartu tensi ketika metode pembanding kedua baru saja diukur
+                confirmedTypes.delete('tensi');
+                const sysInt = parseInt(data.sys);
+                const diaInt = parseInt(data.dia);
+                const pulseInt = parseInt(data.pulse);
+
+                if (data.source === 'omron') {
+                    currentSessionData.results['tensi_omron'] = { sys: sysInt, dia: diaInt, pulse: pulseInt, source: 'omron' };
+                    if (data.raw_log_id) currentSessionData.raw_log_ids['tensi_omron'] = data.raw_log_id;
+                } else {
+                    currentSessionData.results['tensi_sensor'] = { sys: sysInt, dia: diaInt, pulse: pulseInt, source: 'sensor' };
+                    if (data.raw_log_id) currentSessionData.raw_log_ids['tensi_sensor'] = data.raw_log_id;
+                }
                 if (data.raw_log_id) currentSessionData.raw_log_ids['tensi'] = data.raw_log_id;
-                box.find(".classification-status").text(classifyTensi(data.sys, data.dia));
+
+                renderTensiAndBpmComparison();
                 showPendingCardActions('tensi');
 
-                // Saat menggunakan Tensimeter Omron, hasil BPM/Pulse otomatis dimasukkan juga ke kartu Detak Jantung
-                if (data.source === 'omron' && parseInt(data.pulse) > 0 && !confirmedTypes.has('bpm')) {
-                    const bpmVal = parseInt(data.pulse);
+                // Saat menggunakan Tensimeter Omron (atau jika kedua metode diukur sebagai pembanding),
+                // masukkan juga nilai Pulse/BPM ke kartu Detak Jantung
+                if (pulseInt > 0 && (data.source === 'omron' || !confirmedTypes.has('bpm') || currentSessionData.results['tensi_omron'])) {
+                    confirmedTypes.delete('bpm');
                     const bpmBox = $(`.result-box[data-type="bpm"]`);
-                    bpmBox.find(".value").text(`${bpmVal} bpm`);
-                    currentSessionData.results['bpm'] = bpmVal;
+                    const primaryBpm = (currentSessionData.results['tensi_omron'] && currentSessionData.results['tensi_omron'].pulse > 0)
+                        ? currentSessionData.results['tensi_omron'].pulse
+                        : pulseInt;
+                    bpmBox.find(".value").text(`${primaryBpm} bpm`);
+                    currentSessionData.results['bpm'] = primaryBpm;
                     if (data.raw_log_id) currentSessionData.raw_log_ids['bpm'] = data.raw_log_id;
-                    bpmBox.find(".classification-status").text(getHealthStatus('bpm', bpmVal, currentSessionData.patient_gender));
+                    bpmBox.find(".classification-status").text(getHealthStatus('bpm', primaryBpm, currentSessionData.patient_gender));
+                    renderTensiAndBpmComparison();
                     showPendingCardActions('bpm');
                 }
             }
@@ -993,13 +1116,24 @@
                 box.find(".classification-status").text(getHealthStatus('spo2', data.value, currentSessionData.patient_gender));
                 showPendingCardActions('spo2');
             }
-            else if (data.type === 'bpm' && !confirmedTypes.has('bpm')) {
-                const box = $(`.result-box[data-type="bpm"]`);
-                box.find(".value").text(`${data.value} bpm`);
-                currentSessionData.results['bpm'] = parseInt(data.value);
-                if (data.raw_log_id) currentSessionData.raw_log_ids['bpm'] = data.raw_log_id;
-                box.find(".classification-status").text(getHealthStatus('bpm', data.value, currentSessionData.patient_gender));
-                showPendingCardActions('bpm');
+            else if (data.type === 'bpm') {
+                const bpmVal = parseInt(data.value);
+                if (currentSessionData.results['tensi_sensor']) {
+                    currentSessionData.results['tensi_sensor'].pulse = bpmVal;
+                }
+                if (!confirmedTypes.has('bpm') || currentSessionData.results['tensi_omron']) {
+                    confirmedTypes.delete('bpm');
+                    const box = $(`.result-box[data-type="bpm"]`);
+                    const primaryBpm = (currentSessionData.results['tensi_omron'] && currentSessionData.results['tensi_omron'].pulse > 0)
+                        ? currentSessionData.results['tensi_omron'].pulse
+                        : bpmVal;
+                    box.find(".value").text(`${primaryBpm} bpm`);
+                    currentSessionData.results['bpm'] = primaryBpm;
+                    if (data.raw_log_id) currentSessionData.raw_log_ids['bpm'] = data.raw_log_id;
+                    box.find(".classification-status").text(getHealthStatus('bpm', primaryBpm, currentSessionData.patient_gender));
+                    renderTensiAndBpmComparison();
+                    showPendingCardActions('bpm');
+                }
             }
             else if (data.type === 'suhu' && !confirmedTypes.has('suhu')) {
                 const box = $(`.result-box[data-type="suhu"]`);

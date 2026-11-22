@@ -251,6 +251,126 @@
     </div>
 </div>
 
+<!-- PANEL PEMBANDING & FINE-TUNING SENSOR MAX30102 vs TENSIMETER OMRON HEM-7156T -->
+<div class="ml-panel-card no-print" style="border-left: 5px solid #0b4f8a;">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+        <div>
+            <h3 style="margin:0; color:#0f172a;"><i class="fas fa-balance-scale" style="color:#0b4f8a;"></i> Pembanding, Kalibrasi &amp; Fine-Tuning Sensor MAX30102 vs Tensimeter Omron HEM-7156T</h3>
+            <p style="margin:4px 0 0; font-size:0.88rem; color:#64748b;">
+                Saat satu sesi pasien mengukur dengan <strong>Sensor MAX30102</strong> dan <strong>Tensimeter Omron HEM-7156T</strong>, kedua data otomatis ditautkan untuk kalibrasi offset (<strong>SYS, DIA, BPM</strong>) maupun <em>fine-tuning</em> model regresi gelombang PPG.
+            </p>
+        </div>
+        {% if ppg_omron_stats and ppg_omron_stats.active_model %}
+            <span style="background:#dcfce7; color:#166534; border:1px solid #86efac; padding:5px 12px; border-radius:999px; font-size:0.8rem; font-weight:700;">
+                <i class="fas fa-check-circle"></i> Model Fine-Tuned Aktif ({{ ppg_omron_stats.active_model.n_samples }} sampel • {{ ppg_omron_stats.active_model.trained_at }})
+            </span>
+        {% endif %}
+    </div>
+
+    <div class="ml-stats-row">
+        <div class="ml-stat-box" style="border-color:#93c5fd; background:#eff6ff;">
+            <div class="lbl" style="color:#1e40af;">Pasangan MAX30102 vs Omron</div>
+            <div class="val" style="color:#1d4ed8;">{{ ppg_omron_stats.n_pairs if ppg_omron_stats else 0 }} <small style="font-size:0.75rem; font-weight:600;">sesi</small></div>
+        </div>
+        <div class="ml-stat-box">
+            <div class="lbl">Error Sistolik (SYS)</div>
+            <div class="val">
+                {% if ppg_omron_stats and ppg_omron_stats.sys_mae is not none %}
+                    ±{{ ppg_omron_stats.sys_mae }} <small style="font-size:0.72rem; font-weight:600; color:#64748b;">mmHg (MAE)</small>
+                {% else %}-{% endif %}
+            </div>
+            <small style="color:#475569;">Offset aktif: <strong>{{ '%+.1f'|format(ppg_omron_stats.current_sys_bias if ppg_omron_stats else 0) }}</strong> (Saran: <strong>{{ '%+.1f'|format(ppg_omron_stats.recommended_sys_bias if ppg_omron_stats else 0) }}</strong>)</small>
+        </div>
+        <div class="ml-stat-box">
+            <div class="lbl">Error Diastolik (DIA)</div>
+            <div class="val">
+                {% if ppg_omron_stats and ppg_omron_stats.dia_mae is not none %}
+                    ±{{ ppg_omron_stats.dia_mae }} <small style="font-size:0.72rem; font-weight:600; color:#64748b;">mmHg (MAE)</small>
+                {% else %}-{% endif %}
+            </div>
+            <small style="color:#475569;">Offset aktif: <strong>{{ '%+.1f'|format(ppg_omron_stats.current_dia_bias if ppg_omron_stats else 0) }}</strong> (Saran: <strong>{{ '%+.1f'|format(ppg_omron_stats.recommended_dia_bias if ppg_omron_stats else 0) }}</strong>)</small>
+        </div>
+        <div class="ml-stat-box">
+            <div class="lbl">Error Detak Jantung (BPM)</div>
+            <div class="val">
+                {% if ppg_omron_stats and ppg_omron_stats.bpm_mae is not none %}
+                    ±{{ ppg_omron_stats.bpm_mae }} <small style="font-size:0.72rem; font-weight:600; color:#64748b;">bpm (MAE)</small>
+                {% else %}-{% endif %}
+            </div>
+            <small style="color:#475569;">Offset aktif: <strong>{{ '%+.1f'|format(ppg_omron_stats.current_bpm_bias if ppg_omron_stats else 0) }}</strong> (Saran: <strong>{{ '%+.1f'|format(ppg_omron_stats.recommended_bpm_bias if ppg_omron_stats else 0) }}</strong>)</small>
+        </div>
+    </div>
+
+    <div class="ml-toolbar">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <a href="/api/ml_dataset/export_ppg_omron_csv" class="ml-btn ml-btn-blue">
+                <i class="fas fa-file-csv"></i> Export CSV Pembanding MAX30102 vs Omron
+            </a>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" id="btnAutoCalibPpgOmron" class="ml-btn ml-btn-green">
+                <i class="fas fa-sliders-h"></i> Auto-Kalibrasi Offset (SYS, DIA, BPM) dari Data Omron
+            </button>
+            <button type="button" id="btnTrainPpgOmron" class="ml-btn ml-btn-amber">
+                <i class="fas fa-cogs"></i> Fine-Tune Model ML Gelombang PPG vs Omron
+            </button>
+        </div>
+    </div>
+
+    <div class="gt-table-wrap">
+        <table class="gt-table">
+            <thead>
+                <tr>
+                    <th>ID PPG</th>
+                    <th>Waktu</th>
+                    <th>Pasien</th>
+                    <th>Sensor MAX30102 (SYS/DIA • BPM)</th>
+                    <th>Omron HEM-7156T (SYS/DIA • BPM)</th>
+                    <th>Selisih (Omron − Sensor)</th>
+                    <th>SpO2</th>
+                    <th>Gelombang Mentah</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if ppg_omron_stats and ppg_omron_stats.pairs %}
+                    {% for p in ppg_omron_stats.pairs %}
+                    <tr>
+                        <td><strong>#{{ p.ppg_id }}</strong></td>
+                        <td style="white-space:nowrap;">{{ p.created_at }}</td>
+                        <td>{{ p.patient_name }}</td>
+                        <td>
+                            <span style="color:#08999c; font-weight:700;">{{ p.sensor_sys }}/{{ p.sensor_dia }} mmHg</span>
+                            • {{ p.sensor_bpm }} bpm
+                        </td>
+                        <td>
+                            <span style="color:#1d4ed8; font-weight:700;">{{ p.omron_sys }}/{{ p.omron_dia }} mmHg</span>
+                            • {{ p.omron_bpm }} bpm
+                        </td>
+                        <td style="font-family:monospace; font-weight:700;">
+                            SYS {{ '%+d'|format(p.err_sys) }} |
+                            DIA {{ '%+d'|format(p.err_dia) if p.err_dia is not none else '-' }} |
+                            BPM {{ '%+d'|format(p.err_bpm) if p.err_bpm is not none else '-' }}
+                        </td>
+                        <td>{{ p.sensor_spo2 }}%</td>
+                        <td>
+                            <button type="button" class="ml-btn ml-btn-slate btn-view-raw" style="padding:4px 9px; font-size:0.75rem;" data-raw='{{ p.rvals | tojson | safe }}' data-id="{{ p.ppg_id }}">
+                                <i class="fas fa-wave-square"></i> Fitur PPG
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="8" style="text-align:center; padding:18px; color:#64748b;">
+                            Belum ada sesi pembanding ganda. Pada menu <strong>Mengukur</strong>, lakukan pengukuran Tekanan Darah dengan <strong>Tensimeter Omron</strong> lalu klik tombol <strong>+ Bandingkan dgn Sensor MAX30102</strong> (atau sebaliknya).
+                        </td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
 <!-- PANEL MANAJEMEN GROUND-TRUTH & DATASET MACHINE LEARNING -->
 <div class="ml-panel-card no-print">
     <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
@@ -482,6 +602,48 @@
                 },
                 error: function (xhr) {
                     const msg = (xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : "Gagal melatih model ML.";
+                    alert("ℹ️ " + msg);
+                    btn.prop("disabled", false).html(oriHtml);
+                }
+            });
+        });
+
+        $("#btnAutoCalibPpgOmron").on("click", function () {
+            const btn = $(this);
+            const oriHtml = btn.html();
+            btn.prop("disabled", true).html('<i class="fas fa-spinner fa-spin"></i> Mengkalibrasi...');
+
+            $.ajax({
+                url: "/api/ml_dataset/calibrate_ppg_from_omron",
+                type: "POST",
+                contentType: "application/json",
+                success: function (res) {
+                    alert("✅ " + res.message);
+                    window.location.reload();
+                },
+                error: function (xhr) {
+                    const msg = (xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : "Gagal melakukan auto-kalibrasi.";
+                    alert("ℹ️ " + msg);
+                    btn.prop("disabled", false).html(oriHtml);
+                }
+            });
+        });
+
+        $("#btnTrainPpgOmron").on("click", function () {
+            const btn = $(this);
+            const oriHtml = btn.html();
+            btn.prop("disabled", true).html('<i class="fas fa-spinner fa-spin"></i> Fine-Tuning...');
+
+            $.ajax({
+                url: "/api/ml_dataset/train_ppg_model",
+                type: "POST",
+                contentType: "application/json",
+                success: function (res) {
+                    alert("✅ " + res.message);
+                    window.location.reload();
+                },
+                error: function (xhr) {
+                    const msg = (xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : "Gagal melakukan fine-tuning.";
                     alert("ℹ️ " + msg);
                     btn.prop("disabled", false).html(oriHtml);
                 }

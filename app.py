@@ -96,10 +96,17 @@ def init_database_and_defaults():
             conn = get_db_connection()
             cur = conn.cursor()
 
-            # Pastikan kolom baru spo2_value & temperature_value tersedia jika upgrade DB lama
+            # Pastikan kolom baru spo2_value, temperature_value, dan kolom pembanding Tensi (Omron vs Sensor) tersedia
             cur.execute("ALTER TABLE measurements ADD COLUMN IF NOT EXISTS blood_pressure_sys INT DEFAULT 0;")
             cur.execute("ALTER TABLE measurements ADD COLUMN IF NOT EXISTS blood_pressure_dia INT DEFAULT 0;")
             cur.execute("ALTER TABLE measurements ADD COLUMN IF NOT EXISTS blood_pressure_pulse INT DEFAULT 0;")
+            cur.execute("ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bp_source VARCHAR(30) DEFAULT 'sensor';")
+            cur.execute("ALTER TABLE measurements ADD COLUMN IF NOT EXISTS sensor_bp_sys INT DEFAULT 0;")
+            cur.execute("ALTER TABLE measurements ADD COLUMN IF NOT EXISTS sensor_bp_dia INT DEFAULT 0;")
+            cur.execute("ALTER TABLE measurements ADD COLUMN IF NOT EXISTS sensor_bp_pulse INT DEFAULT 0;")
+            cur.execute("ALTER TABLE measurements ADD COLUMN IF NOT EXISTS omron_bp_sys INT DEFAULT 0;")
+            cur.execute("ALTER TABLE measurements ADD COLUMN IF NOT EXISTS omron_bp_dia INT DEFAULT 0;")
+            cur.execute("ALTER TABLE measurements ADD COLUMN IF NOT EXISTS omron_bp_pulse INT DEFAULT 0;")
             cur.execute("ALTER TABLE measurements ADD COLUMN IF NOT EXISTS spo2_value FLOAT DEFAULT 0;")
             cur.execute("ALTER TABLE measurements ADD COLUMN IF NOT EXISTS temperature_value FLOAT DEFAULT 0;")
             cur.execute("ALTER TABLE measurements ADD COLUMN IF NOT EXISTS height FLOAT DEFAULT 0;")
@@ -222,6 +229,153 @@ def save_raw_sensor_log(sensor_type, raw_vals, predicted_val, raw_frames=None):
         return new_id
     except Exception as e:
         print(f"[RAW LOG WARN] {e}")
+        return None
+
+
+def auto_link_ppg_omron_pair(patient_id, ppg_log_id=None, omron_log_id=None, measurement_id=None):
+    """
+    Menautkan rekaman Sensor MAX30102 (ppg_max30102) dengan Tensimeter Omron HEM-7156T (tensi_omron_ble)
+    pada sesi pasien yang sama agar tersimpan sebagai pasangan pembanding (Ground-Truth)
+    untuk fine-tuning & kalibrasi.
+    """
+    if not patient_id:
+        return None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # 1. Cari baris ppg_max30102 terbaru untuk pasien ini dalam 60 menit terakhir jika ppg_log_id belum diberikan
+        if ppg_log_id:
+            cur.execute(
+                "SELECT id, raw_values, raw_frames, context_features FROM raw_sensor_data WHERE id = %s AND sensor_type = 'ppg_max30102'",
+                (int(ppg_log_id),)
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, raw_values, raw_frames, context_features
+                FROM raw_sensor_data
+                WHERE patient_id = %s
+                  AND sensor_type = 'ppg_max30102'
+                  AND created_at >= NOW() - INTERVAL '60 minutes'
+                ORDER BY id DESC LIMIT 1
+                """,
+                (patient_id,)
+            )
+        ppg_row = cur.fetchone()
+
+        # 2. Cari baris tensi_omron_ble terbaru untuk pasien ini dalam 60 menit terakhir jika omron_log_id belum diberikan
+        if omron_log_id:
+            cur.execute(
+                "SELECT id, raw_values, context_features FROM raw_sensor_data WHERE id = %s AND sensor_type = 'tensi_omron_ble'",
+                (int(omron_log_id),)
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, raw_values, context_features
+                FROM raw_sensor_data
+                WHERE patient_id = %s
+                  AND sensor_type = 'tensi_omron_ble'
+                  AND created_at >= NOW() - INTERVAL '60 minutes'
+                ORDER BY id DESC LIMIT 1
+                """,
+                (patient_id,)
+            )
+        omron_row = cur.fetchone()
+
+        if not ppg_row or not omron_row:
+            cur.close()
+            conn.close()
+            return None
+
+        pid_log, ppg_rvals, ppg_rframes, ppg_ctx = ppg_row
+        oid_log, om_rvals, om_ctx = omron_row
+
+        ppg_rvals = ppg_rvals if isinstance(ppg_rvals, dict) else (json.loads(ppg_rvals) if ppg_rvals else {})
+        ppg_rframes = ppg_rframes if isinstance(ppg_rframes, dict) else (json.loads(ppg_rframes) if ppg_rframes else {})
+        ppg_ctx = ppg_ctx if isinstance(ppg_ctx, dict) else (json.loads(ppg_ctx) if ppg_ctx else {})
+        om_rvals = om_rvals if isinstance(om_rvals, dict) else (json.loads(om_rvals) if om_rvals else {})
+        om_ctx = om_ctx if isinstance(om_ctx, dict) else (json.loads(om_ctx) if om_ctx else {})
+
+        s_sys = int(ppg_rvals.get("sys") or 0)
+        s_dia = int(ppg_rvals.get("dia") or 0)
+        s_bpm = int(ppg_rvals.get("bpm") or 0)
+        s_spo2 = float(ppg_rvals.get("spo2") or 0)
+
+        o_sys = int(om_rvals.get("sys") or 0)
+        o_dia = int(om_rvals.get("dia") or 0)
+        o_bpm = int(om_rvals.get("pulse") or 0)
+        o_map = int(om_rvals.get("map") or 0)
+
+        if s_sys <= 0 or o_sys <= 0:
+            cur.close()
+            conn.close()
+            return None
+
+        err_sys = o_sys - s_sys
+        err_dia = o_dia - s_dia
+        err_bpm = (o_bpm - s_bpm) if (o_bpm > 0 and s_bpm > 0) else 0
+
+        pair_meta = {
+            "paired_omron_log_id": oid_log,
+            "paired_ppg_log_id": pid_log,
+            "omron_sys": o_sys,
+            "omron_dia": o_dia,
+            "omron_bpm": o_bpm,
+            "omron_map": o_map,
+            "sensor_sys": s_sys,
+            "sensor_dia": s_dia,
+            "sensor_bpm": s_bpm,
+            "sensor_spo2": s_spo2,
+            "raw_sys_unbiased": ppg_rframes.get("raw_sys_unbiased", s_sys),
+            "raw_dia_unbiased": ppg_rframes.get("raw_dia_unbiased", s_dia),
+            "raw_bpm_unbiased": ppg_rframes.get("raw_bpm", s_bpm),
+            "err_sys": err_sys,
+            "err_dia": err_dia,
+            "err_bpm": err_bpm
+        }
+
+        ppg_ctx.update(pair_meta)
+        om_ctx.update(pair_meta)
+        note_str = f"Pembanding Omron: {o_sys}/{o_dia} mmHg ({o_bpm} bpm) vs Sensor: {s_sys}/{s_dia} mmHg ({s_bpm} bpm) | ΔSYS={err_sys:+d}, ΔDIA={err_dia:+d}, ΔBPM={err_bpm:+d}"
+
+        cur.execute(
+            """
+            UPDATE raw_sensor_data
+            SET predicted_value = %s,
+                ground_truth_value = %s,
+                ground_truth_source = 'Omron HEM-7156T (BLE)',
+                context_features = %s,
+                notes = %s,
+                measurement_id = COALESCE(%s, measurement_id),
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (float(s_sys), float(o_sys), json.dumps(ppg_ctx), note_str, measurement_id, pid_log)
+        )
+
+        cur.execute(
+            """
+            UPDATE raw_sensor_data
+            SET ground_truth_value = %s,
+                ground_truth_source = 'Omron HEM-7156T (Standar)',
+                context_features = %s,
+                notes = %s,
+                measurement_id = COALESCE(%s, measurement_id),
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (float(o_sys), json.dumps(om_ctx), note_str, measurement_id, oid_log)
+        )
+
+        conn.commit()
+        cur.close()
+        conn.close()
+        print(f"[PAIR LINKED] PPG #{pid_log} <-> Omron #{oid_log}: {note_str}")
+        return pair_meta
+    except Exception as e:
+        print(f"[PAIR LINK WARN] {e}")
         return None
 
 
@@ -390,6 +544,7 @@ def on_mqtt_message(client, userdata, msg):
             float(sys_val),
             raw_frames=raw_meta
         )
+        pair_info = auto_link_ppg_omron_pair(active_patient_id, omron_log_id=log_id)
         socketio.emit("measurement_update", {
             "type": "tensi",
             "sys": sys_val,
@@ -399,7 +554,8 @@ def on_mqtt_message(client, userdata, msg):
             "source": "omron",
             "source_label": "Omron HEM-7156T (BLE)",
             "measured_at": m_at,
-            "raw_log_id": log_id
+            "raw_log_id": log_id,
+            "pair_info": pair_info
         })
         return
 
@@ -436,14 +592,26 @@ def on_mqtt_message(client, userdata, msg):
                 "dia": dia_val,
                 "bpm": bpm_val,
                 "spo2": spo2_val,
+                "raw_sys_unbiased": raw_ppg.get("raw_sys_unbiased", sys_val),
+                "raw_dia_unbiased": raw_ppg.get("raw_dia_unbiased", dia_val),
+                "raw_bpm": raw_ppg.get("raw_bpm", bpm_val),
                 "dc_red": raw_ppg.get("dc_red"),
                 "dc_ir": raw_ppg.get("dc_ir"),
+                "rms_red": raw_ppg.get("rms_red"),
+                "rms_ir": raw_ppg.get("rms_ir"),
+                "ac_dc_red": raw_ppg.get("ac_dc_red"),
+                "ac_dc_ir": raw_ppg.get("ac_dc_ir"),
+                "r_ratio": raw_ppg.get("r_ratio"),
+                "ts_rise_sec": raw_ppg.get("ts_rise_sec"),
+                "td_decay_sec": raw_ppg.get("td_decay_sec"),
+                "rsd_ratio": raw_ppg.get("rsd_ratio"),
                 "n_samples": raw_ppg.get("n_samples"),
                 "sampling_hz": raw_ppg.get("sampling_hz")
             },
-            float(spo2_val or 0),
+            float(sys_val or spo2_val or 0),
             raw_frames=raw_ppg
         )
+        pair_info = auto_link_ppg_omron_pair(active_patient_id, ppg_log_id=log_id)
 
         if target_mode in ("tensi", "tekanan", "ppg_all"):
             socketio.emit("measurement_update", {
@@ -453,7 +621,8 @@ def on_mqtt_message(client, userdata, msg):
                 "pulse": bpm_val,
                 "source": "sensor",
                 "source_label": "Sensor MAX30102 (PPG)",
-                "raw_log_id": log_id
+                "raw_log_id": log_id,
+                "pair_info": pair_info
             })
         if target_mode in ("spo2", "ppg_all"):
             socketio.emit("measurement_update", {"type": "spo2", "value": spo2_val, "raw_log_id": log_id})
@@ -848,14 +1017,42 @@ def handle_save_session(data):
     bpm_standalone = int(results.get("bpm", 0) or 0)
 
     tensi_data = results.get("tensi")
+    tensi_omron = results.get("tensi_omron") if isinstance(results.get("tensi_omron"), dict) else None
+    tensi_sensor = results.get("tensi_sensor") if isinstance(results.get("tensi_sensor"), dict) else None
+
+    omron_sys   = int(tensi_omron.get("sys", 0) or 0) if tensi_omron else 0
+    omron_dia   = int(tensi_omron.get("dia", 0) or 0) if tensi_omron else 0
+    omron_pulse = int(tensi_omron.get("pulse", 0) or 0) if tensi_omron else 0
+
+    sensor_sys   = int(tensi_sensor.get("sys", 0) or 0) if tensi_sensor else 0
+    sensor_dia   = int(tensi_sensor.get("dia", 0) or 0) if tensi_sensor else 0
+    sensor_pulse = int(tensi_sensor.get("pulse", 0) or 0) if tensi_sensor else 0
+
     if isinstance(tensi_data, dict):
         bp_sys   = int(tensi_data.get("sys", 0) or 0)
         bp_dia   = int(tensi_data.get("dia", 0) or 0)
         bp_pulse = int(tensi_data.get("pulse", 0) or bpm_standalone)
+        src      = tensi_data.get("source", "sensor")
+        if src == "omron" and omron_sys == 0:
+            omron_sys, omron_dia, omron_pulse = bp_sys, bp_dia, bp_pulse
+        elif src != "omron" and sensor_sys == 0:
+            sensor_sys, sensor_dia, sensor_pulse = bp_sys, bp_dia, bp_pulse
     else:
-        bp_sys   = 0
-        bp_dia   = 0
-        bp_pulse = bpm_standalone
+        bp_sys   = omron_sys or sensor_sys
+        bp_dia   = omron_dia or sensor_dia
+        bp_pulse = omron_pulse or sensor_pulse or bpm_standalone
+
+    # Jika kedua metode (Omron & Sensor) diukur, utamakan angka klinis Omron sebagai nilai utama rekam medis,
+    # sambil menyimpan kedua data di kolom sensor_bp_* dan omron_bp_* sebagai pembanding
+    if omron_sys > 0 and sensor_sys > 0:
+        bp_source = "both"
+        bp_sys, bp_dia = omron_sys, omron_dia
+        if omron_pulse > 0:
+            bp_pulse = omron_pulse
+    elif omron_sys > 0:
+        bp_source = "omron"
+    else:
+        bp_source = "sensor"
 
     height = float(results.get("tinggi_badan", 0.0) or 0.0)
     weight = float(results.get("berat_badan", 0.0) or 0.0)
@@ -869,16 +1066,20 @@ def handle_save_session(data):
                 patient_id, user_id,
                 cholesterol_value, uric_acid_value, blood_sugar_value,
                 blood_pressure_sys, blood_pressure_dia, blood_pressure_pulse,
+                bp_source, sensor_bp_sys, sensor_bp_dia, sensor_bp_pulse,
+                omron_bp_sys, omron_bp_dia, omron_bp_pulse,
                 spo2_value, temperature_value,
                 height, weight, measured_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             RETURNING id
             """,
             (
                 patient_id, user_id,
                 cholesterol, uric_acid, blood_sugar,
                 bp_sys, bp_dia, bp_pulse,
+                bp_source, sensor_sys, sensor_dia, sensor_pulse,
+                omron_sys, omron_dia, omron_pulse,
                 spo2_val, temp_val,
                 height, weight
             )
@@ -887,7 +1088,7 @@ def handle_save_session(data):
 
         # Tautkan raw_sensor_data pada sesi ini ke measurement_id & perkaya fitur konteks fisiologis untuk ML
         raw_log_ids = data.get("raw_log_ids") or {}
-        id_list = [int(v) for v in raw_log_ids.values() if v]
+        id_list = list({int(v) for v in raw_log_ids.values() if v})
         if id_list:
             cur.execute("SELECT umur, jenis_kelamin FROM patients WHERE id = %s", (patient_id,))
             pinfo = cur.fetchone()
@@ -899,6 +1100,13 @@ def handle_save_session(data):
                 "bpm": bp_pulse if bp_pulse > 0 else None,
                 "sys": bp_sys if bp_sys > 0 else None,
                 "dia": bp_dia if bp_dia > 0 else None,
+                "bp_source": bp_source,
+                "sensor_sys": sensor_sys if sensor_sys > 0 else None,
+                "sensor_dia": sensor_dia if sensor_dia > 0 else None,
+                "sensor_bpm": sensor_pulse if sensor_pulse > 0 else None,
+                "omron_sys": omron_sys if omron_sys > 0 else None,
+                "omron_dia": omron_dia if omron_dia > 0 else None,
+                "omron_bpm": omron_pulse if omron_pulse > 0 else None,
                 "height": height if height > 0 else None,
                 "weight": weight if weight > 0 else None
             }
@@ -906,7 +1114,7 @@ def handle_save_session(data):
                 """
                 UPDATE raw_sensor_data
                 SET measurement_id = %s,
-                    context_features = %s,
+                    context_features = COALESCE(context_features, '{}'::jsonb) || %s::jsonb,
                     updated_at = NOW()
                 WHERE id = ANY(%s)
                 """,
@@ -914,6 +1122,11 @@ def handle_save_session(data):
             )
 
         conn.commit()
+
+        # Pastikan pasangan pembanding PPG MAX30102 <-> Omron HEM-7156T ditautkan penuh
+        ppg_lid = raw_log_ids.get("tensi_sensor") or raw_log_ids.get("spo2") or raw_log_ids.get("bpm") or raw_log_ids.get("tensi")
+        om_lid  = raw_log_ids.get("tensi_omron")
+        auto_link_ppg_omron_pair(patient_id, ppg_log_id=ppg_lid, omron_log_id=om_lid, measurement_id=measurement_id)
         emit("save_status", {"status": "success", "measurement_id": measurement_id, "message": "Data sesi pengukuran & rekaman raw sensor ML berhasil disimpan ke database!"})
     except Exception as e:
         conn.rollback()
@@ -2473,6 +2686,372 @@ def hitung_evaluasi_data_science():
     return eval_results
 
 
+def get_ppg_omron_comparison_stats():
+    """
+    Mengumpulkan seluruh pasangan data pembanding antara Sensor MAX30102 (ppg_max30102)
+    dengan Tensimeter Omron HEM-7156T (tensi_omron_ble) untuk analisis error, auto-kalibrasi offset,
+    dan fine-tuning model ML PPG.
+    """
+    calib = load_calibration()
+    bp_cal = calib.get("tekanan_darah") or {}
+    bpm_cal = calib.get("bpm") or {}
+
+    stats = {
+        "n_pairs": 0,
+        "sys_mae": None,
+        "sys_rmse": None,
+        "sys_bias_err": None,
+        "dia_mae": None,
+        "dia_rmse": None,
+        "dia_bias_err": None,
+        "bpm_mae": None,
+        "bpm_rmse": None,
+        "bpm_bias_err": None,
+        "current_sys_bias": float(bp_cal.get("sys_bias", 0.0)),
+        "current_dia_bias": float(bp_cal.get("dia_bias", 0.0)),
+        "current_bpm_bias": float(bpm_cal.get("bias", 0.0)),
+        "recommended_sys_bias": float(bp_cal.get("sys_bias", 0.0)),
+        "recommended_dia_bias": float(bp_cal.get("dia_bias", 0.0)),
+        "recommended_bpm_bias": float(bpm_cal.get("bias", 0.0)),
+        "active_model": None,
+        "pairs": []
+    }
+
+    mpath = os.path.join(BASE_DIR, "model", "max30102_ppg_omron.joblib")
+    if os.path.exists(mpath):
+        try:
+            b = joblib.load(mpath)
+            if isinstance(b, dict):
+                stats["active_model"] = {
+                    "n_samples": b.get("n_samples", 0),
+                    "trained_at": b.get("trained_at", "-"),
+                    "cv_metrics": b.get("cv_metrics", {})
+                }
+        except Exception:
+            pass
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT r.id, r.created_at, COALESCE(p.nama_lengkap, 'Tanpa Nama'),
+                   p.umur, p.jenis_kelamin, r.raw_values, r.raw_frames,
+                   r.context_features, r.ground_truth_value
+            FROM raw_sensor_data r
+            LEFT JOIN patients p ON p.id = r.patient_id
+            WHERE r.sensor_type = 'ppg_max30102'
+            ORDER BY r.id DESC
+            """
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        s_sys_list, o_sys_list, u_sys_list = [], [], []
+        s_dia_list, o_dia_list, u_dia_list = [], [], []
+        s_bpm_list, o_bpm_list, u_bpm_list = [], [], []
+
+        for rid, cat, pname, pumur, pjk, rvals, rframes, ctx, gt_val in rows:
+            rvals = rvals if isinstance(rvals, dict) else (json.loads(rvals) if rvals else {})
+            rframes = rframes if isinstance(rframes, dict) else (json.loads(rframes) if rframes else {})
+            ctx = ctx if isinstance(ctx, dict) else (json.loads(ctx) if ctx else {})
+
+            s_sys = int(ctx.get("sensor_sys") or rvals.get("sys") or 0)
+            s_dia = int(ctx.get("sensor_dia") or rvals.get("dia") or 0)
+            s_bpm = int(ctx.get("sensor_bpm") or rvals.get("bpm") or 0)
+            s_spo2 = float(ctx.get("sensor_spo2") or rvals.get("spo2") or 0)
+
+            o_sys = int(ctx.get("omron_sys") or (gt_val if gt_val else 0) or 0)
+            o_dia = int(ctx.get("omron_dia") or 0)
+            o_bpm = int(ctx.get("omron_bpm") or 0)
+
+            if s_sys <= 0 or o_sys <= 0:
+                continue
+
+            raw_sys_unb = float(rframes.get("raw_sys_unbiased") or rvals.get("raw_sys_unbiased") or (s_sys - stats["current_sys_bias"]))
+            raw_dia_unb = float(rframes.get("raw_dia_unbiased") or rvals.get("raw_dia_unbiased") or (s_dia - stats["current_dia_bias"]))
+            raw_bpm_unb = float(rframes.get("raw_bpm") or rvals.get("raw_bpm") or (s_bpm - stats["current_bpm_bias"]))
+
+            s_sys_list.append(float(s_sys))
+            o_sys_list.append(float(o_sys))
+            u_sys_list.append(raw_sys_unb)
+
+            if s_dia > 0 and o_dia > 0:
+                s_dia_list.append(float(s_dia))
+                o_dia_list.append(float(o_dia))
+                u_dia_list.append(raw_dia_unb)
+
+            if s_bpm > 0 and o_bpm > 0:
+                s_bpm_list.append(float(s_bpm))
+                o_bpm_list.append(float(o_bpm))
+                u_bpm_list.append(raw_bpm_unb)
+
+            stats["pairs"].append({
+                "ppg_id": rid,
+                "omron_id": ctx.get("paired_omron_log_id"),
+                "created_at": cat.strftime("%d/%m/%Y %H:%M") if cat else "-",
+                "patient_name": pname,
+                "umur": pumur or ctx.get("umur") or "-",
+                "jenis_kelamin": pjk or ctx.get("jenis_kelamin") or "-",
+                "sensor_sys": s_sys,
+                "sensor_dia": s_dia,
+                "sensor_bpm": s_bpm,
+                "sensor_spo2": s_spo2,
+                "omron_sys": o_sys,
+                "omron_dia": o_dia,
+                "omron_bpm": o_bpm,
+                "err_sys": o_sys - s_sys,
+                "err_dia": (o_dia - s_dia) if o_dia > 0 else None,
+                "err_bpm": (o_bpm - s_bpm) if o_bpm > 0 else None,
+                "raw_sys_unbiased": round(raw_sys_unb, 1),
+                "raw_dia_unbiased": round(raw_dia_unb, 1),
+                "raw_bpm_unbiased": round(raw_bpm_unb, 1),
+                "rvals": rvals,
+                "rframes": rframes
+            })
+
+        n_p = len(s_sys_list)
+        stats["n_pairs"] = n_p
+        if n_p >= 1:
+            arr_s_sys = np.array(s_sys_list)
+            arr_o_sys = np.array(o_sys_list)
+            arr_u_sys = np.array(u_sys_list)
+            stats["sys_mae"] = round(float(np.mean(np.abs(arr_o_sys - arr_s_sys))), 2)
+            stats["sys_rmse"] = round(float(np.sqrt(np.mean((arr_o_sys - arr_s_sys) ** 2))), 2)
+            stats["sys_bias_err"] = round(float(np.mean(arr_o_sys - arr_s_sys)), 2)
+            stats["recommended_sys_bias"] = round(float(np.mean(arr_o_sys - arr_u_sys)), 1)
+
+        if len(s_dia_list) >= 1:
+            arr_s_dia = np.array(s_dia_list)
+            arr_o_dia = np.array(o_dia_list)
+            arr_u_dia = np.array(u_dia_list)
+            stats["dia_mae"] = round(float(np.mean(np.abs(arr_o_dia - arr_s_dia))), 2)
+            stats["dia_rmse"] = round(float(np.sqrt(np.mean((arr_o_dia - arr_s_dia) ** 2))), 2)
+            stats["dia_bias_err"] = round(float(np.mean(arr_o_dia - arr_s_dia)), 2)
+            stats["recommended_dia_bias"] = round(float(np.mean(arr_o_dia - arr_u_dia)), 1)
+
+        if len(s_bpm_list) >= 1:
+            arr_s_bpm = np.array(s_bpm_list)
+            arr_o_bpm = np.array(o_bpm_list)
+            arr_u_bpm = np.array(u_bpm_list)
+            stats["bpm_mae"] = round(float(np.mean(np.abs(arr_o_bpm - arr_s_bpm))), 2)
+            stats["bpm_rmse"] = round(float(np.sqrt(np.mean((arr_o_bpm - arr_s_bpm) ** 2))), 2)
+            stats["bpm_bias_err"] = round(float(np.mean(arr_o_bpm - arr_s_bpm)), 2)
+            stats["recommended_bpm_bias"] = round(float(np.mean(arr_o_bpm - arr_u_bpm)), 1)
+
+    except Exception as e:
+        print(f"[PPG OMRON STATS WARN] {e}")
+
+    return stats
+
+
+@app.route("/api/ml_dataset/calibrate_ppg_from_omron", methods=["POST"])
+def calibrate_ppg_from_omron():
+    """
+    Menghitung koreksi offset optimal (sys_bias, dia_bias, bpm_bias) dari seluruh pasangan
+    pengukuran Sensor MAX30102 vs Tensimeter Omron HEM-7156T dan menerapkannya ke calibration_config.json.
+    """
+    if g.user is None or g.user[2] != "admin":
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+    st = get_ppg_omron_comparison_stats()
+    if st["n_pairs"] < 1:
+        return jsonify({
+            "status": "error",
+            "message": "Belum ada pasangan data pembanding Sensor MAX30102 vs Tensimeter Omron HEM-7156T. Lakukan pengukuran dengan kedua metode pada sesi pasien terlebih dahulu."
+        }), 400
+
+    cfg = load_calibration()
+    cfg["tekanan_darah"] = {
+        "sys_bias": float(st["recommended_sys_bias"]),
+        "dia_bias": float(st["recommended_dia_bias"])
+    }
+    cfg["bpm"] = {
+        "bias": float(st["recommended_bpm_bias"])
+    }
+    try:
+        with open(CALIBRATION_FILE, "w") as f:
+            json.dump(cfg, f, indent=4)
+        return jsonify({
+            "status": "success",
+            "n_pairs": st["n_pairs"],
+            "new_sys_bias": cfg["tekanan_darah"]["sys_bias"],
+            "new_dia_bias": cfg["tekanan_darah"]["dia_bias"],
+            "new_bpm_bias": cfg["bpm"]["bias"],
+            "message": (
+                f"Auto-Kalibrasi berhasil dari {st['n_pairs']} pasangan pembanding Omron vs MAX30102! "
+                f"Offset baru diterapkan: SYS {cfg['tekanan_darah']['sys_bias']:+.1f} mmHg, "
+                f"DIA {cfg['tekanan_darah']['dia_bias']:+.1f} mmHg, "
+                f"BPM {cfg['bpm']['bias']:+.1f} bpm."
+            )
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Gagal menyimpan kalibrasi: {e}"}), 500
+
+
+@app.route("/api/ml_dataset/train_ppg_model", methods=["POST"])
+def train_ppg_model_from_omron():
+    """
+    Fine-tuning model regresi Machine Learning (SYS & DIA) dari fitur morfologi gelombang PPG MAX30102
+    terhadap nilai Ground-Truth Tensimeter Omron HEM-7156T.
+    """
+    if g.user is None or g.user[2] != "admin":
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+    st = get_ppg_omron_comparison_stats()
+    X_list, y_sys_list, y_dia_list = [], [], []
+
+    for p in st["pairs"]:
+        rf = p.get("rframes") or {}
+        rv = p.get("rvals") or {}
+        o_sys = p.get("omron_sys")
+        o_dia = p.get("omron_dia")
+        if not o_sys or not o_dia or o_sys <= 0 or o_dia <= 0:
+            continue
+
+        raw_bpm = float(rf.get("raw_bpm") or rv.get("raw_bpm") or p.get("sensor_bpm") or 72.0)
+        dc_red = float(rf.get("dc_red") or rv.get("dc_red") or 30000.0)
+        dc_ir  = float(rf.get("dc_ir") or rv.get("dc_ir") or 40000.0)
+        rms_red = float(rf.get("rms_red") or rv.get("rms_red") or 45.0)
+        rms_ir  = float(rf.get("rms_ir") or rv.get("rms_ir") or 65.0)
+        ac_dc_ir  = float(rf.get("ac_dc_ir") or rv.get("ac_dc_ir") or (rms_ir / max(1.0, dc_ir)))
+        ac_dc_red = float(rf.get("ac_dc_red") or rv.get("ac_dc_red") or (rms_red / max(1.0, dc_red)))
+        r_ratio = float(rf.get("r_ratio") or rv.get("r_ratio") or (ac_dc_red / max(1e-6, ac_dc_ir)))
+        ts = float(rf.get("ts_rise_sec") or rv.get("ts_rise_sec") or 0.13)
+        td = float(rf.get("td_decay_sec") or rv.get("td_decay_sec") or 0.45)
+        rsd = float(rf.get("rsd_ratio") or rv.get("rsd_ratio") or (ts / max(0.01, td)))
+
+        X_list.append([raw_bpm, ac_dc_ir, ac_dc_red, r_ratio, ts, td, rsd])
+        y_sys_list.append(float(o_sys))
+        y_dia_list.append(float(o_dia))
+
+    n_samples = len(X_list)
+    if n_samples < 3:
+        return jsonify({
+            "status": "error",
+            "n_samples": n_samples,
+            "message": f"Baru tersedia {n_samples} pasangan lengkap (SYS & DIA) antara MAX30102 dan Omron HEM-7156T. Kumpulkan minimal 3 pasangan untuk fine-tuning model ML (atau gunakan tombol Auto-Kalibrasi Offset untuk 1–2 sampel)."
+        }), 400
+
+    from sklearn.ensemble import RandomForestRegressor, VotingRegressor
+    from sklearn.linear_model import Ridge
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import Pipeline
+    from sklearn.model_selection import LeaveOneOut, KFold, cross_val_predict
+    from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+    X = np.array(X_list, dtype=float)
+    y_sys = np.array(y_sys_list, dtype=float)
+    y_dia = np.array(y_dia_list, dtype=float)
+
+    def _build_estimator():
+        ridge_pipe = Pipeline([("scaler", StandardScaler()), ("ridge", Ridge(alpha=3.0))])
+        if n_samples >= 6:
+            rf = RandomForestRegressor(n_estimators=100, max_depth=4, min_samples_leaf=2, random_state=42)
+            return VotingRegressor([("ridge", ridge_pipe), ("rf", rf)])
+        return ridge_pipe
+
+    model_sys = _build_estimator()
+    model_dia = _build_estimator()
+
+    cv = LeaveOneOut() if n_samples < 15 else KFold(n_splits=5, shuffle=True, random_state=42)
+    cv_pred_sys = cross_val_predict(model_sys, X, y_sys, cv=cv)
+    cv_pred_dia = cross_val_predict(model_dia, X, y_dia, cv=cv)
+
+    mae_sys = round(float(mean_absolute_error(y_sys, cv_pred_sys)), 2)
+    rmse_sys = round(float(np.sqrt(mean_squared_error(y_sys, cv_pred_sys))), 2)
+    mae_dia = round(float(mean_absolute_error(y_dia, cv_pred_dia)), 2)
+    rmse_dia = round(float(np.sqrt(mean_squared_error(y_dia, cv_pred_dia))), 2)
+
+    model_sys.fit(X, y_sys)
+    model_dia.fit(X, y_dia)
+
+    os.makedirs(os.path.join(BASE_DIR, "model"), exist_ok=True)
+    mpath = os.path.join(BASE_DIR, "model", "max30102_ppg_omron.joblib")
+    bundle = {
+        "model_sys": model_sys,
+        "model_dia": model_dia,
+        "features": ["raw_bpm", "ac_dc_ir", "ac_dc_red", "r_ratio", "ts_rise_sec", "td_decay_sec", "rsd_ratio"],
+        "n_samples": n_samples,
+        "trained_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "cv_metrics": {
+            "mae_sys": mae_sys,
+            "rmse_sys": rmse_sys,
+            "mae_dia": mae_dia,
+            "rmse_dia": rmse_dia
+        }
+    }
+    joblib.dump(bundle, mpath)
+
+    # Karena model ML baru sudah menyerap baseline SYS & DIA terhadap Omron, setel sys_bias & dia_bias ke 0.0 agar tidak double-offset
+    cfg = load_calibration()
+    cfg["tekanan_darah"] = {"sys_bias": 0.0, "dia_bias": 0.0}
+    if st.get("recommended_bpm_bias") is not None:
+        cfg["bpm"] = {"bias": float(st["recommended_bpm_bias"])}
+    try:
+        with open(CALIBRATION_FILE, "w") as f:
+            json.dump(cfg, f, indent=4)
+    except Exception:
+        pass
+
+    return jsonify({
+        "status": "success",
+        "n_samples": n_samples,
+        "metrics": bundle["cv_metrics"],
+        "message": (
+            f"Fine-Tuning Model ML MAX30102 terhadap Omron HEM-7156T berhasil dari {n_samples} sampel! "
+            f"(MAE CV: SYS ±{mae_sys} mmHg, DIA ±{mae_dia} mmHg) dan langsung aktif."
+        )
+    })
+
+
+@app.route("/api/ml_dataset/export_ppg_omron_csv")
+def export_ppg_omron_csv():
+    if g.user is None or g.user[2] != "admin":
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+    st = get_ppg_omron_comparison_stats()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "ppg_log_id", "omron_log_id", "created_at", "patient_name", "umur", "jenis_kelamin",
+        "sensor_sys_mmhg", "sensor_dia_mmhg", "sensor_bpm", "sensor_spo2_pct",
+        "omron_sys_mmhg", "omron_dia_mmhg", "omron_bpm",
+        "err_sys_mmhg", "err_dia_mmhg", "err_bpm",
+        "raw_sys_unbiased", "raw_dia_unbiased", "raw_bpm_unbiased",
+        "dc_ir", "dc_red", "rms_ir", "rms_red", "ac_dc_ir", "ac_dc_red", "r_ratio",
+        "ts_rise_sec", "td_decay_sec", "rsd_ratio"
+    ])
+    for p in st["pairs"]:
+        rf = p.get("rframes") or {}
+        rv = p.get("rvals") or {}
+        writer.writerow([
+            p["ppg_id"], p.get("omron_id") or "", p["created_at"], p["patient_name"], p["umur"], p["jenis_kelamin"],
+            p["sensor_sys"], p["sensor_dia"], p["sensor_bpm"], p["sensor_spo2"],
+            p["omron_sys"], p["omron_dia"], p["omron_bpm"],
+            p["err_sys"], p["err_dia"] if p["err_dia"] is not None else "", p["err_bpm"] if p["err_bpm"] is not None else "",
+            p["raw_sys_unbiased"], p["raw_dia_unbiased"], p["raw_bpm_unbiased"],
+            rf.get("dc_ir") or rv.get("dc_ir") or "",
+            rf.get("dc_red") or rv.get("dc_red") or "",
+            rf.get("rms_ir") or rv.get("rms_ir") or "",
+            rf.get("rms_red") or rv.get("rms_red") or "",
+            rf.get("ac_dc_ir") or rv.get("ac_dc_ir") or "",
+            rf.get("ac_dc_red") or rv.get("ac_dc_red") or "",
+            rf.get("r_ratio") or rv.get("r_ratio") or "",
+            rf.get("ts_rise_sec") or rv.get("ts_rise_sec") or "",
+            rf.get("td_decay_sec") or rv.get("td_decay_sec") or "",
+            rf.get("rsd_ratio") or rv.get("rsd_ratio") or ""
+        ])
+
+    fname = f"medisyn_pembanding_max30102_vs_omron_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={fname}"}
+    )
+
+
 @app.route("/laporan_evaluasi")
 def laporan_evaluasi():
     if g.user is None or g.user[2] != "admin":
@@ -2480,6 +3059,7 @@ def laporan_evaluasi():
         return redirect(url_for("dashboard"))
 
     metrics = hitung_evaluasi_data_science()
+    ppg_omron_stats = get_ppg_omron_comparison_stats()
     dataset_stats = {
         "total_spektro": 0,
         "total_labeled": 0,
@@ -2566,6 +3146,7 @@ def laporan_evaluasi():
     return render_template(
         "evaluation.html",
         metrics=metrics,
+        ppg_omron_stats=ppg_omron_stats,
         dataset_stats=dataset_stats,
         raw_records=raw_records,
         channel_names=SPECTRAL_18_CHANNELS

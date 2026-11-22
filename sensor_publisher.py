@@ -313,6 +313,7 @@ def spo2_scan_worker(client, target_mode="ppg_all"):
                 "duration_sec": round(actual_ppg_dur, 2),
                 "dc_red": dc_red,
                 "dc_ir": dc_ir,
+                **(getattr(max_sensor, "last_ppg_features", {}) or {}),
                 "red_waveform": [int(x) for x in red_samples],
                 "ir_waveform": [int(x) for x in ir_samples]
             },

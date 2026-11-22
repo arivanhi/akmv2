@@ -31,6 +31,10 @@ Dokumen aturan konteks otomatis untuk Google Antigravity saat membuka workspace 
      2. **Sensor Optik `MAX30102` (`0x57`)**:
         - Durasi scan `6 detik` (ADC internal `100 Hz` dengan FIFO averaging `4` = output `25 Hz` ≈ `150 sampel` Red & IR).
         - `enable_leds()` selalu menulis ulang register `FIFO=0x50`, `SPO2=0x47`, `LED=0x37` untuk mencegah reset POR saat sensor cabut-pasang.
+     3. **Pengukuran Pembanding Ganda (Omron vs Sensor MAX30102) untuk Kalibrasi & Fine-Tuning**:
+        - Setelah mengukur dengan salah satu metode (Omron atau MAX30102), pengguna dapat mengukur lagi dengan metode lainnya pada sesi pasien yang sama melalui tombol `+ Bandingkan dgn Sensor MAX30102` / `+ Bandingkan dgn Tensimeter Omron` di kartu Tekanan Darah atau lewat menu Pilih Pengukuran.
+        - Kedua data disimpan berdampingan di tabel `measurements` (`sensor_bp_sys/dia/pulse`, `omron_bp_sys/dia/pulse`, `bp_source`) dan otomatis ditautkan pada `raw_sensor_data` (`auto_link_ppg_omron_pair`).
+        - Halaman **Evaluasi AI** (`/laporan_evaluasi`) dan **Pengaturan** (`/settings`) menyediakan fitur **Auto-Kalibrasi Offset (`SYS, DIA, BPM`) dari Data Omron** (`/api/ml_dataset/calibrate_ppg_from_omron`), **Fine-Tune Model ML Gelombang PPG vs Omron** (`/api/ml_dataset/train_ppg_model` -> `model/max30102_ppg_omron.joblib`), serta **Export CSV Pembanding MAX30102 vs Omron** (`/api/ml_dataset/export_ppg_omron_csv`).
 3. **`0x49` — `AS7265x` Triad 18-Channel (`410–940 nm`, Gula Darah, Kolesterol, Asam Urat)**:
    - Sampling kontinu optimal **`~3.3 – 3.5 Hz`** (`INTEG = 49` ≈ `278 ms/frame`, `Gain = 64x`, arus 3 LED `25 mA`), durasi scan **`7 detik`** (`~20–25 frame` × 18 kanal).
    - Pra-pemrosesan: buang `2 frame` transien awal (*settling time*), saring *outlier* goyangan jari per kanal dengan metode **IQR (*Interquartile Range*)**, dan hitung normalisasi **L2**.

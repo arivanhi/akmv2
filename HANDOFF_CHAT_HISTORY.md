@@ -658,3 +658,24 @@ ok mungkin ada perbaikan sedikit ya, saat dengan omron kan menghasilkan detak ja
 Diperbarui pada `templates/measure.html`: ketika pengukuran Tekanan Darah menggunakan **Tensimeter Omron HEM-7156T** selesai, nilai detak nadi (`pulse / BPM`) yang dikirim oleh Omron kini **otomatis dimasukkan juga ke kartu hasil `Detak Jantung` (`bpm`)** lengkap dengan klasifikasi klinisnya (*Normal / Bradikardia / Takikardia*) dan ikut masuk ke daftar konfirmasi hasil (`[ Ulang ]` / `[ Selesai ]`), sehingga petugas tidak perlu mengukur Detak Jantung lagi secara terpisah.
 
 ---
+
+### Turn 22 (2026-11-22 03:21:13 UTC)
+**USER:**
+
+ada tambahan sedikit ya, untuk yang omron dan oxymeter ini, saat sudah mengukur dengan salah satunya, bisa melakukan lagi dan menyimpan kedua datanya juga ya, sebagai pembanding antara sensor dengan tensimeter, untuk dilakukan fine tuning dan kalibrasi
+
+**ANTIGRAVITY:**
+
+1. **Pengukuran Pembanding Ganda (Omron & Sensor MAX30102) dalam Satu Sesi (`templates/measure.html`)**:
+   - Setelah mengukur dengan salah satu metode (**Tensimeter Omron HEM-7156T** atau **Sensor MAX30102**), petugas dapat langsung melanjutkan mengukur metode kedua melalui tombol **`+ Bandingkan dgn Sensor MAX30102`** / **`+ Bandingkan dgn Tensimeter Omron`** di kartu **Tekanan Darah** maupun melalui tombol **`Tekanan Darah (+Sensor / +Omron)`** dan **`Oximeter 3-in-1`** di menu pilih pengukuran.
+   - Ketika kedua metode sudah diukur, kartu **Tekanan Darah** dan **Detak Jantung** menampilkan kotak perbandingan berdampingan (`Omron (Standar)` vs `Sensor MAX30102` beserta selisih `ΔSYS`, `ΔDIA`, dan `ΔBPM`), dengan tetap mengutamakan angka klinis Omron sebagai nilai rekam medis utama pasien.
+2. **Penyimpanan Kedua Data & Tautan Ground-Truth Otomatis (`app.py`, `init.sql`)**:
+   - Tabel `measurements` kini menyimpan kedua pasang data sekaligus (`sensor_bp_sys`, `sensor_bp_dia`, `sensor_bp_pulse`, `omron_bp_sys`, `omron_bp_dia`, `omron_bp_pulse`, dan `bp_source = 'both' | 'omron' | 'sensor'`).
+   - Fungsi `auto_link_ppg_omron_pair()` di `app.py` otomatis menautkan rekaman `ppg_max30102` dan `tensi_omron_ble` di tabel `raw_sensor_data` lengkap dengan fitur morfologi gelombang PPG (`raw_sys_unbiased`, `raw_dia_unbiased`, `raw_bpm`, `ac_dc_ir`, `ac_dc_red`, `r_ratio`, `ts_rise_sec`, `td_decay_sec`, `rsd_ratio`) dan selisih error terhadap Omron.
+3. **Fitur Auto-Kalibrasi Offset & Fine-Tuning Model ML PPG (`templates/evaluation.html`, `templates/settings.html`, `drivers/driver_max30102.py`)**:
+   - Menambahkan panel **Pembanding, Kalibrasi & Fine-Tuning Sensor MAX30102 vs Tensimeter Omron HEM-7156T** di halaman **Evaluasi AI** (`/laporan_evaluasi`) serta tombol cepat di halaman **Pengaturan** (`/settings`):
+     - **`Auto-Kalibrasi Offset (SYS, DIA, BPM) dari Data Omron`** (`POST /api/ml_dataset/calibrate_ppg_from_omron`): menghitung rata-rata selisih (`Omron − Sensor`) dan langsung memperbarui `calibration_config.json`.
+     - **`Fine-Tune Model ML Gelombang PPG vs Omron`** (`POST /api/ml_dataset/train_ppg_model`): melatih model regresi `Ridge + RandomForest` (`model/max30102_ppg_omron.joblib`) yang otomatis dipakai oleh `driver_max30102.py`.
+     - **`Export CSV Pembanding MAX30102 vs Omron`** (`GET /api/ml_dataset/export_ppg_omron_csv`).
+
+---

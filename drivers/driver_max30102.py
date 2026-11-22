@@ -8,9 +8,16 @@ Perbaikan utama:
   meskipun jari sedikit bergerak atau menekan agak kuat
 """
 
+import os
 import time
 import threading
 import numpy as np
+
+try:
+    import joblib
+    HAS_JOBLIB = True
+except ImportError:
+    HAS_JOBLIB = False
 
 try:
     import smbus2
@@ -19,6 +26,7 @@ except ImportError:
     HAS_SMBUS = False
 
 MAX_ADDR = 0x57
+PPG_ML_MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "model", "max30102_ppg_omron.joblib")
 
 REG_FIFO_WR_PTR = 0x04
 REG_OVF_COUNTER = 0x05
@@ -41,6 +49,7 @@ class MAX30102:
         self.i2c_lock = i2c_lock or threading.Lock()
         self.bus = None
         self.connected = False
+        self.last_ppg_features = {}
         self._init_sensor()
 
     def _open_bus(self):
@@ -310,19 +319,50 @@ class MAX30102:
         if raw_bpm is None:
             return None, None, None, None, "weak_pulse"
 
-        bpm = int(round(np.clip(raw_bpm + bpm_bias, 40.0, 180.0)))
-
         ts = float(np.median(rise_times)) if rise_times else 0.13
         td = float(np.median(decay_times)) if decay_times else 0.45
         rsd = ts / max(0.01, td)
+        ac_dc_red = float(rms_red / max(1.0, dc_red))
+        ac_dc_ir  = float(rms_ir / max(1.0, dc_ir))
 
-        delta_sbp = 0.50 * (bpm - 72.0) - 80.0 * (ts - 0.13) + 18.0 * (rsd - 0.30)
-        delta_dbp = 0.30 * (bpm - 72.0) - 45.0 * (td - 0.45)
+        delta_sbp = 0.50 * (raw_bpm - 72.0) - 80.0 * (ts - 0.13) + 18.0 * (rsd - 0.30)
+        delta_dbp = 0.30 * (raw_bpm - 72.0) - 45.0 * (td - 0.45)
+        base_sys = 118.0 + delta_sbp
+        base_dia = 76.0 + delta_dbp
+        model_src = "pwa_formula"
 
-        sys_val = int(round(np.clip(118.0 + delta_sbp + sys_bias, 80.0, 200.0)))
-        dia_val = int(round(np.clip(76.0 + delta_dbp + dia_bias, 50.0, 130.0)))
+        # Gunakan model hasil Fine-Tuning terhadap Tensimeter Omron HEM-7156T jika sudah dilatih
+        if HAS_JOBLIB and os.path.exists(PPG_ML_MODEL_PATH):
+            try:
+                bundle = joblib.load(PPG_ML_MODEL_PATH)
+                if isinstance(bundle, dict) and "model_sys" in bundle and "model_dia" in bundle:
+                    feat_vec = np.array([[raw_bpm, ac_dc_ir, ac_dc_red, r_ratio, ts, td, rsd]], dtype=float)
+                    base_sys = float(bundle["model_sys"].predict(feat_vec)[0])
+                    base_dia = float(bundle["model_dia"].predict(feat_vec)[0])
+                    model_src = f"ml_omron_finetuned({bundle.get('n_samples', 0)}gt)"
+            except Exception as e:
+                print(f"[MAX30102 ML WARN] Gagal memuat model fine-tuned: {e}")
+
+        bpm = int(round(np.clip(raw_bpm + bpm_bias, 40.0, 180.0)))
+        sys_val = int(round(np.clip(base_sys + sys_bias, 80.0, 210.0)))
+        dia_val = int(round(np.clip(base_dia + dia_bias, 45.0, 135.0)))
         if (sys_val - dia_val) < 25:
             dia_val = sys_val - 30
+
+        self.last_ppg_features = {
+            "raw_bpm": round(float(raw_bpm), 2),
+            "raw_sys_unbiased": round(float(base_sys), 2),
+            "raw_dia_unbiased": round(float(base_dia), 2),
+            "rms_red": round(rms_red, 3),
+            "rms_ir": round(rms_ir, 3),
+            "ac_dc_red": round(ac_dc_red, 6),
+            "ac_dc_ir": round(ac_dc_ir, 6),
+            "r_ratio": round(float(r_ratio), 5),
+            "ts_rise_sec": round(float(ts), 4),
+            "td_decay_sec": round(float(td), 4),
+            "rsd_ratio": round(float(rsd), 4),
+            "model_source": model_src
+        }
 
         return spo2, bpm, sys_val, dia_val, "ok"
 
