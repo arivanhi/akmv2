@@ -22,6 +22,7 @@
  */
 
 #include <Arduino.h>
+#include <math.h>
 #include <Wire.h>
 #include <Preferences.h>
 #include <Adafruit_GFX.h>
@@ -130,7 +131,8 @@ bool ledBlinkState              = false;
 char toastText[12]              = "";
 unsigned long toastUntilMs      = 0;
 
-// Struktur pembacaan tombol (debounce + short press + long press + key repeat)
+// Struktur pembacaan tombol (dideklarasikan di atas semua fungsi agar
+// auto-prototype preprocessor Arduino IDE mengenali tipe datanya)
 struct ButtonTracker {
   uint8_t       pin;
   bool          rawLast;
@@ -141,9 +143,30 @@ struct ButtonTracker {
   unsigned long lastRepeatMs;
 };
 
+struct ButtonEvents {
+  bool shortPress;
+  bool longPress;
+  bool repeatTick;
+};
+
 ButtonTracker btnMeasure = { PIN_BTN_MEASURE, false, false, false, 0, 0, 0 };
 ButtonTracker btnCalib   = { PIN_BTN_CALIB,   false, false, false, 0, 0, 0 };
 ButtonTracker btnReset   = { PIN_BTN_RESET,   false, false, false, 0, 0, 0 };
+
+// Deklarasi prototipe fungsi eksplisit
+void showToast(const char* msg, unsigned long durationMs = 1300);
+void sendHeightViaBLE(float heightVal, bool showOledFeedback);
+float readSingleDistanceCm();
+void sortFloatArray(float* arr, uint8_t n);
+float capturePrecisionDistanceCm(uint8_t totalPings);
+void updateContinuousUltrasonic();
+void savePoleHeightToFlash();
+void runAutoTareFloor();
+ButtonEvents pollButton(ButtonTracker &btn);
+void handleButtons();
+void renderOledScreen();
+void setupBLE();
+void updateBleAndStatusLed();
 
 // ============================================================================
 // 5. CALLBACK BLE SERVER
@@ -161,7 +184,7 @@ class HeightServerCallbacks : public BLEServerCallbacks {
 // ============================================================================
 // 6. FUNGSI UTILITAS TAMPILAN TOAST & PENGIRIMAN BLE
 // ============================================================================
-void showToast(const char* msg, unsigned long durationMs = 1300) {
+void showToast(const char* msg, unsigned long durationMs) {
   strncpy(toastText, msg, sizeof(toastText) - 1);
   toastText[sizeof(toastText) - 1] = '\0';
   toastUntilMs = millis() + durationMs;
@@ -409,12 +432,6 @@ void runAutoTareFloor() {
 // ============================================================================
 // 9. LOGIKA 3 PUSH BUTTON (DEBOUNCE, SHORT PRESS, LONG PRESS, REPEAT)
 // ============================================================================
-struct ButtonEvents {
-  bool shortPress;
-  bool longPress;
-  bool repeatTick;
-};
-
 ButtonEvents pollButton(ButtonTracker &btn) {
   ButtonEvents ev = { false, false, false };
   unsigned long now = millis();
@@ -462,15 +479,15 @@ void handleButtons() {
   // --- MODE KALIBRASI MANUAL TIANG (SET TIANG) ---
   if (currentMode == MODE_CALIB_POLE) {
     if (evMeasure.shortPress) {
-      poleHeightCm = min(MAX_POLE_HEIGHT_CM, roundf((poleHeightCm + 0.1f) * 10.0f) / 10.0f);
+      poleHeightCm = fminf(MAX_POLE_HEIGHT_CM, roundf((poleHeightCm + 0.1f) * 10.0f) / 10.0f);
     } else if (evMeasure.repeatTick) {
-      poleHeightCm = min(MAX_POLE_HEIGHT_CM, roundf((poleHeightCm + 0.5f) * 10.0f) / 10.0f);
+      poleHeightCm = fminf(MAX_POLE_HEIGHT_CM, roundf((poleHeightCm + 0.5f) * 10.0f) / 10.0f);
     }
 
     if (evReset.shortPress) {
-      poleHeightCm = max(MIN_POLE_HEIGHT_CM, roundf((poleHeightCm - 0.1f) * 10.0f) / 10.0f);
+      poleHeightCm = fmaxf(MIN_POLE_HEIGHT_CM, roundf((poleHeightCm - 0.1f) * 10.0f) / 10.0f);
     } else if (evReset.repeatTick) {
-      poleHeightCm = max(MIN_POLE_HEIGHT_CM, roundf((poleHeightCm - 0.5f) * 10.0f) / 10.0f);
+      poleHeightCm = fmaxf(MIN_POLE_HEIGHT_CM, roundf((poleHeightCm - 0.5f) * 10.0f) / 10.0f);
     }
 
     if (evCalib.shortPress || evCalib.longPress) {

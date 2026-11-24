@@ -732,3 +732,20 @@ dan terdapat 3 push button
    - **Kompatibilitas Penuh BLE MEDISYN (`ble_scale_service.py`)**: Mengiklankan nama perangkat **`bleScaleHeight`** dengan Service UUID `4fafc201-1fb5-459e-8fcc-c5c9c331914b` dan Characteristic UUID `beb5483e-36e1-4688-b7f5-ea07361b26a8` (`READ | NOTIFY`), mengirim string UTF-8 tinggi badan dalam `cm` saat dikunci (`HOLD` + pengiriman berkala 1 detik selama `HOLD` & terkoneksi) maupun saat stabil penuh, tanpa pernah mengirim nilai `0.0` saat kosong.
 
 ---
+
+### Turn 26 (2026-11-24 13:49:00 UTC)
+**USER:**
+
+ada error Compilation error: 'ButtonEvents' does not name a type
+coba bandingkan dengan ini *(menyertakan sketsa pembanding berbasis `U8g2` 128x64, `OLED_SDA=8`, `OLED_SCL=9`, `trigPin=1`, `echoPin=0`, 1 tombol `buttonPin=3`)*
+untuk librariesnya ada di sini `C:\Users\ariva\OneDrive - Universitas Diponegoro\Documents\Arduino\libraries`
+
+**ANTIGRAVITY:**
+
+1. **Perbaikan Error Kompilasi & Verifikasi `arduino-cli` (`firmware/esp32c3_height_ble/esp32c3_height_ble.ino`)**:
+   - **Penyebab Error**: Preprocessor `.ino` pada Arduino IDE otomatis menyisipkan prototipe fungsi `ButtonEvents pollButton(ButtonTracker &btn);` tepat di atas fungsi pertama, sementara `struct ButtonEvents` sebelumnya dideklarasikan di baris bawah.
+   - **Perbaikan & Hasil Uji Kompilasi**: Memindahkan `struct ButtonEvents` beserta prototipe fungsi eksplisit ke bagian atas berkas (sebelum seluruh fungsi/class) dan mengganti `min/max` float ke `fminf/fmaxf` (`<math.h>`). Diverifikasi langsung menggunakan `arduino-cli` pada `esp32:esp32@3.3.12` + `OneDrive\Documents\Arduino\libraries` dengan hasil **sukses `exit code 0`** (`Sketch uses 676497 bytes / 51%`, `Global variables 19928 bytes / 6%`).
+2. **Perbandingan Teknis Kode Pembanding vs `esp32c3_height_ble.ino`**:
+   - Menjelaskan perbedaan rumus tinggi badan (`Tinggi Tiang - Jarak` vs jarak mentah), ukuran OLED (`0.91" 128x32` vs `0.96" 128x64` di mana `y=45..60` terpotong di layar 0.91"), keamanan pin ESP32-C3 (`GPIO6/7` bebas konflik vs `GPIO8/9` yang bentrok dengan LED onboard & tombol `BOOT`), 3 tombol non-blocking + simpan NVS Flash vs 1 tombol `delay(5000)`, filter median + timeout vs rata-rata tanpa timeout, serta jaminan sinkronisasi notifikasi BLE saat `HOLD` ke `ble_scale_service.py`.
+
+---
