@@ -713,3 +713,22 @@ untuk pin bluetoothnya rpp02n coba 0000 atau 1234
    - Kartu **POS Printer 58 MP58 (Bluetooth)** di halaman **Pengaturan** menampilkan status *live* (`BLE Siap (RPP02N)`), input penyimpanan MAC Address (`DC:0D:51:61:2D:52`), tombol **`Scan & Hubungkan`**, serta **`Test Print`**.
 
 ---
+
+### Turn 25 (2026-11-24 12:15:00 UTC)
+**USER:**
+
+selanjutnya saya ingin membuat alat ukur tinggi badannya dengan esp32 c3 super mini, hc sr04, dan lcd oled 0.91 inch, buatkan tabel wiringnya dulu kemudian buatkan program .ino nya tidak perlu di upload tapi buatkan saja. dan nanti alat ukur tinggi ini akan terhubung ke medisyn dengan BLE. sementara medisynya tidak tidak ada, fokus ke pembuatan alat ukur tingginya dulu
+dan terdapat 3 push button
+
+**ANTIGRAVITY:**
+
+1. **Tabel Wiring & Dokumentasi Perangkat Keras (`firmware/esp32c3_height_ble/README.md`)**:
+   - Menyusun pemetaan pin **ESP32-C3 Super Mini** yang bebas konflik dengan pin *strapping* / LED bawaan (`GPIO8`) / tombol `BOOT` (`GPIO9`):
+     - **OLED 0.91" (`128×32` I2C `SSD1306`, `0x3C`)**: `VCC → 3.3V`, `GND → GND`, `SDA → GPIO6`, `SCL → GPIO7`.
+     - **Sensor Ultrasonik `HC-SR04`**: `VCC → 5V` (atau `3.3V` untuk `HC-SR04P`), `GND → GND`, `TRIG → GPIO4`, `ECHO → GPIO5` (melalui pembagi tegangan `1 kΩ` + `2 kΩ` jika `VCC = 5V`).
+     - **3 Push Button (`INPUT_PULLUP` ke `GND`)**: `Button 1 (UKUR / HOLD / +) → GPIO0`, `Button 2 (KALIBRASI / AUTO-TARE) → GPIO1`, `Button 3 (RESET / MODE JARAK / -) → GPIO3`.
+2. **Program Arduino Sketch (`firmware/esp32c3_height_ble/esp32c3_height_ble.ino`)**:
+   - **Mode Mandiri (*Standalone*)**: Filter *rolling median + trimmed mean* 7 sampel ultrasonik dengan kompensasi suhu ruang, antarmuka OLED `128×32` (`LIVE` / `STABIL` / `HOLD` / `JARAK` / `SET TIANG`), penguncian bacaan (`HOLD`), **Auto-Tare Lantai Otomatis** (tahan Tombol 2 selama 1,5 detik), serta kalibrasi tinggi tiang manual (`±0.1 cm` / `±0.5 cm`) yang tersimpan permanen di **NVS Flash (`Preferences`)**.
+   - **Kompatibilitas Penuh BLE MEDISYN (`ble_scale_service.py`)**: Mengiklankan nama perangkat **`bleScaleHeight`** dengan Service UUID `4fafc201-1fb5-459e-8fcc-c5c9c331914b` dan Characteristic UUID `beb5483e-36e1-4688-b7f5-ea07361b26a8` (`READ | NOTIFY`), mengirim string UTF-8 tinggi badan dalam `cm` saat dikunci (`HOLD` + pengiriman berkala 1 detik selama `HOLD` & terkoneksi) maupun saat stabil penuh, tanpa pernah mengirim nilai `0.0` saat kosong.
+
+---
